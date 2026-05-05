@@ -242,24 +242,28 @@ fn flush_session(sid: &str, session: &Session) {
             let rrweb_val = log_value
                 .get("rrweb")
                 .cloned()
-                .unwrap_or(serde_json::json!([]));
-            if rrweb_val.is_array() && !rrweb_val.as_array().unwrap().is_empty() {
+                .unwrap_or_else(|| serde_json::json!([]));
+            if rrweb_val.is_array() {
                 let arr = rrweb_val.as_array().unwrap();
-                let first_ts = arr[0]
-                    .get("timestamp")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                let last_ts = arr
-                    .last()
-                    .and_then(|e| e.get("timestamp"))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                log_value["duration_sec"] =
-                    serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
-                log_value["rrweb"] = serde_json::json!(String::from_utf8_lossy(&compress_json(
-                    &serde_json::json!({"events": arr})
-                ))
-                .to_string());
+                if !arr.is_empty() {
+                    let first_ts = arr[0]
+                        .get("timestamp")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let last_ts = arr
+                        .last()
+                        .and_then(|e| e.get("timestamp"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    log_value["duration_sec"] =
+                        serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
+                    log_value["rrweb"] = serde_json::json!(String::from_utf8_lossy(&compress_json(
+                        &serde_json::json!({"events": arr})
+                    ))
+                    .to_string());
+                } else {
+                    log_value["rrweb"] = serde_json::json!("");
+                }
             } else {
                 log_value["rrweb"] = serde_json::json!("");
             }
