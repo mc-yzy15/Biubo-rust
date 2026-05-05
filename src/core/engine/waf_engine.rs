@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 use dashmap::DashMap;
 use regex::Regex;
@@ -65,6 +66,36 @@ static DETECTION_CACHE: once_cell::sync::Lazy<DashMap<String, CacheEntry>> =
 static HOST_COMPILED_RULES: once_cell::sync::Lazy<DashMap<String, HostCompiledRules>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
+static HOST_RULE_HASH_CACHE: once_cell::sync::Lazy<DashMap<String, String>> =
+    once_cell::sync::Lazy::new(DashMap::new);
+
+/// 缓存统计信息结构体，用于跟踪 WAF 规则缓存的命中和未命中情况
+/// 
+/// 该结构体记录两种缓存的统计信息：
+/// 1. 规则哈希缓存（HOST_RULE_HASH_CACHE）：存储主机规则的哈希值
+/// 2. 编译规则缓存（HOST_COMPILED_RULES）：存储已编译的正则表达式规则
+struct CacheStats {
+    /// 规则哈希缓存命中次数
+    /// 当请求的规则哈希值已在缓存中时计数
+    hash_cache_hits: AtomicU64,
+    /// 规则哈希缓存未命中次数
+    /// 当请求的规则哈希值不在缓存中，需要重新计算时计数
+    hash_cache_misses: AtomicU64,
+    /// 编译规则缓存命中次数
+    /// 当已编译的正则表达式规则可直接从缓存获取时计数
+    compiled_cache_hits: AtomicU64,
+    /// 编译规则缓存未命中次数
+    /// 当需要重新编译正则表达式规则时计数
+    compiled_cache_misses: AtomicU64,
+}
+
+static CACHE_STATS: LazyLock<CacheStats> = LazyLock::new(|| CacheStats {
+    hash_cache_hits: AtomicU64::new(0),
+    hash_cache_misses: AtomicU64::new(0),
+    compiled_cache_hits: AtomicU64::new(0),
+    compiled_cache_misses: AtomicU64::new(0),
+});
+
 const MAX_CACHE_SIZE: usize = 10000;
 
 const LLM_SYSTEM_INSTRUCTION: &str = r#"You are an HTTP security analysis engine. Your job: distinguish real attacks from normal user behavior.
@@ -121,18 +152,38 @@ const LLM_USER_PROMPT_TEMPLATE: &str = r#"## Current Request
 Analyze the above request and return ONLY a JSON object as specified in your instructions."#;
 
 pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
-    let db = get_db(host);
+    if let Some(cached_hash_entry) = HOST_RULE_HASH_CACHE.get(host) {
+        CACHE_STATS.hash_cache_hits.fetch_add(1, Ordering::Relaxed);
+        let cached_hash = cached_hash_entry.value().clone();
+        
+        if let Some(host_cache) = HOST_COMPILED_RULES.get(host) {
+            if host_cache.hash == cached_hash {
+                CACHE_STATS.compiled_cache_hits.fetch_add(1, Ordering::Relaxed);
+                return host_cache.compiled.clone();
+            }
+        }
+        
+        CACHE_STATS.compiled_cache_misses.fetch_add(1, Ordering::Relaxed);
+    } else {
+        CACHE_STATS.hash_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
 
+    let db = get_db(host);
     let security = db.ram_get("security").unwrap_or(serde_json::json!({}));
     let waf_rules = security.get("waf_rules").cloned().unwrap_or(serde_json::json!({}));
 
     let rule_hash = compute_rule_hash(&waf_rules);
+    
+    HOST_RULE_HASH_CACHE.insert(host.to_string(), rule_hash.clone());
 
     if let Some(host_cache) = HOST_COMPILED_RULES.get(host) {
         if host_cache.hash == rule_hash {
+            CACHE_STATS.compiled_cache_hits.fetch_add(1, Ordering::Relaxed);
             return host_cache.compiled.clone();
         }
     }
+
+    CACHE_STATS.compiled_cache_misses.fetch_add(1, Ordering::Relaxed);
 
     let mut compiled = HashMap::new();
     if let Some(obj) = waf_rules.as_object() {
@@ -166,7 +217,7 @@ pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
     HOST_COMPILED_RULES.insert(
         host.to_string(),
         HostCompiledRules {
-            hash: rule_hash,
+            hash: rule_hash.clone(),
             compiled: compiled.clone(),
         },
     );
@@ -180,6 +231,42 @@ fn compute_rule_hash(rules: &Value) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     serialized.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+pub fn invalidate_host_rules_cache(host: &str) {
+    HOST_RULE_HASH_CACHE.remove(host);
+    HOST_COMPILED_RULES.remove(host);
+    tracing::info!("WAF rules cache invalidated for host: {}", host);
+}
+
+pub fn invalidate_all_rules_cache() {
+    HOST_RULE_HASH_CACHE.clear();
+    HOST_COMPILED_RULES.clear();
+    tracing::info!("All WAF rules cache invalidated");
+}
+
+pub fn get_cache_stats() -> HashMap<String, u64> {
+    let mut stats = HashMap::new();
+    stats.insert("hash_cache_hits".to_string(), CACHE_STATS.hash_cache_hits.load(Ordering::Relaxed));
+    stats.insert("hash_cache_misses".to_string(), CACHE_STATS.hash_cache_misses.load(Ordering::Relaxed));
+    stats.insert("compiled_cache_hits".to_string(), CACHE_STATS.compiled_cache_hits.load(Ordering::Relaxed));
+    stats.insert("compiled_cache_misses".to_string(), CACHE_STATS.compiled_cache_misses.load(Ordering::Relaxed));
+    stats
+}
+
+pub fn preload_host_rules(host: &str) {
+    let host_string = host.to_string();
+    std::thread::spawn(move || {
+        tracing::info!("Preloading WAF rules for host: {}", host_string);
+        let _ = get_host_rules(&host_string);
+        tracing::info!("WAF rules preloaded for host: {}", host_string);
+    });
+}
+
+pub fn initialize_waf_cache(hosts: Vec<String>) {
+    for host in hosts {
+        preload_host_rules(&host);
+    }
 }
 
 pub fn check_rules(
