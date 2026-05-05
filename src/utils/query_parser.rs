@@ -1,7 +1,22 @@
 pub const VALID_FIELDS: &[&str] = &[
-    "request_id", "type", "attack_types", "time", "ip", "cdn_ip",
-    "country", "city", "fingerprint", "method", "url", "headers", "content",
+    "request_id",
+    "type",
+    "attack_types",
+    "time",
+    "ip",
+    "cdn_ip",
+    "country",
+    "city",
+    "fingerprint",
+    "method",
+    "url",
+    "headers",
+    "content",
 ];
+
+static IN_OPERATOR_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(r"(?i)^IN\(([^)]+)\)$").expect("IN operator regex is valid")
+});
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AstNode {
@@ -70,7 +85,11 @@ pub fn evaluate(node: &AstNode, record: &serde_json::Value) -> bool {
         }
         AstNode::Not(operand) => !evaluate(operand, record),
         AstNode::Field { field, op, value } => {
-            let actual_field = if field == "content" { "data" } else { field.as_str() };
+            let actual_field = if field == "content" {
+                "data"
+            } else {
+                field.as_str()
+            };
             let raw_val = record.get(actual_field);
             let rec_str = flatten(raw_val);
             let is_container = raw_val
@@ -81,11 +100,10 @@ pub fn evaluate(node: &AstNode, record: &serde_json::Value) -> bool {
                 FieldOp::Eq => {
                     if let FieldValue::Str(pattern) = value {
                         let escaped = regex::escape(pattern).replace(r"\*", ".*");
-                        let re = regex::Regex::new(&format!("(?i)^{}$", escaped)).unwrap();
-                        if is_container {
+                        if let Ok(re) = regex::Regex::new(&format!("(?i)^{}$", escaped)) {
                             re.is_match(&rec_str)
                         } else {
-                            re.is_match(&rec_str)
+                            false
                         }
                     } else {
                         false
@@ -105,9 +123,7 @@ pub fn evaluate(node: &AstNode, record: &serde_json::Value) -> bool {
                                 .iter()
                                 .any(|v| rec_str.to_lowercase().contains(&v.to_lowercase()))
                         } else {
-                            values
-                                .iter()
-                                .any(|v| v.eq_ignore_ascii_case(&rec_str))
+                            values.iter().any(|v| v.eq_ignore_ascii_case(&rec_str))
                         }
                     } else {
                         false
@@ -115,8 +131,7 @@ pub fn evaluate(node: &AstNode, record: &serde_json::Value) -> bool {
                 }
                 FieldOp::Range => {
                     if let FieldValue::Range(start, end) = value {
-                        rec_str.as_str() >= start.as_str()
-                            && rec_str.as_str() <= end.as_str()
+                        rec_str.as_str() >= start.as_str() && rec_str.as_str() <= end.as_str()
                     } else {
                         false
                     }
@@ -305,8 +320,7 @@ fn parse_field_token(raw: &str) -> Result<AstNode, String> {
         });
     }
 
-    let in_re = regex::Regex::new(r"(?i)^IN\(([^)]+)\)$").unwrap();
-    if let Some(captures) = in_re.captures(rest) {
+    if let Some(captures) = IN_OPERATOR_RE.captures(rest) {
         let values: Vec<String> = captures[1]
             .split(',')
             .map(|v| v.trim().to_string())

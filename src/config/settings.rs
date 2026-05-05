@@ -69,13 +69,23 @@ fn generate_challenge_secret() -> String {
     hex::encode(hasher.finalize())
 }
 
+fn generate_random_password() -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(uuid::Uuid::new_v4().as_bytes());
+    hasher.update(chrono::Utc::now().timestamp().to_string().as_bytes());
+    hex::encode(hasher.finalize())[..16].to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         let project_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+        let default_password = generate_random_password();
+
         Settings {
             waf_port: 80,
-            dashboard_password: "admin123".to_string(),
+            dashboard_password: default_password,
             cors_origins: vec!["http://ip.zplb.org.cn:7000".to_string()],
 
             host_forward: false,

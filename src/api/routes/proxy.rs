@@ -1,20 +1,20 @@
 use crate::api::app::AppState;
 use crate::core::engine::waf_engine::detect_request;
 use crate::core::security::challenge::{
-    ChallengeStatus, get_challenge_token, verify_challenge_token,
+    get_challenge_token, verify_challenge_token, ChallengeStatus,
 };
-use crate::core::security::rate_limit::{BlockReason, check_rate_limit};
+use crate::core::security::rate_limit::{check_rate_limit, BlockReason};
 use crate::core::session::manager::{build_log_entry, create_session};
 use crate::data::storage::manager::get_db;
 use crate::services::proxy::forwarder::forward_request;
 use crate::utils::compression::decode_content;
 use crate::utils::http_utils::{get_client_ip, get_ip_reputation, is_static_resource};
-use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
+use axum::Router;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -476,10 +476,13 @@ fn check_file_security(
     (true, String::new())
 }
 
+static FILENAME_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(r#"filename="([^"]+)""#).expect("filename regex is valid")
+});
+
 fn extract_filenames_from_multipart(body: &str) -> Vec<String> {
     let mut filenames = Vec::new();
-    let re = regex::Regex::new(r#"filename="([^"]+)""#).unwrap();
-    for cap in re.captures_iter(body) {
+    for cap in FILENAME_RE.captures_iter(body) {
         if let Some(m) = cap.get(1) {
             filenames.push(m.as_str().to_string());
         }

@@ -1,7 +1,7 @@
 [package]
 name = "biubo-waf"
 version = "1.0.0-alpha"
-edition = "2024"
+edition = "2021"
 description = "A Web Application Firewall that Thinks, Remembers, and Visualizes"
 license = "MIT"
 
