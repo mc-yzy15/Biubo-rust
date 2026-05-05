@@ -4,7 +4,7 @@
   <img src="assets/biubo_waf_banner.svg" alt="Biubo WAF Banner" width="800px">
   <br>
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License">
-  <img src="https://img.shields.io/badge/python-3.8%2B-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust">
   <img src="https://img.shields.io/badge/Release-v1.0.0--alpha-orange.svg" alt="Release">
   <img src="https://img.shields.io/badge/AI-LLM_Integrated-purple.svg" alt="AI">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome">
@@ -19,7 +19,7 @@
 **Biubo WAF** is not just another rule-based filter. It is an **Intelligence-First Proxy** that bridges the gap between high-speed security and modern AI intuition. It sits as a guardian in front of your applications, watching every request through a dual lens of **Regex Performance** and **LLM Awareness**.
 
 > [!TIP]
-> **Zero-Zero Setup**: No SQL, No Redis, No complex Nginx configs. Just Python and the power of AI.
+> **Zero-Zero Setup**: No SQL, No Redis, No complex Nginx configs. Just Rust and the power of AI.
 
 ---
 
@@ -72,17 +72,17 @@ graph LR
 
 ## 🚀 Quick Start
 
-### One-Step Installation
+### Build & Run
 ```bash
 # Clone the repository
 git clone https://github.com/BiuboWAF/Biubo.git
 cd Biubo
 
-# Run the interactive setup
-python setup.py
+# Build (requires Rust 1.75+)
+cargo build --release
 
 # Start protecting
-python main.py
+cargo run --release
 ```
 
 ### Docker Deployment

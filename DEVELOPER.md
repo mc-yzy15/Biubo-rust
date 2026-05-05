@@ -9,10 +9,10 @@ Biubo WAF is built with a **Reverse Proxy First** philosophy. It sits at the edg
 ```mermaid
 sequenceDiagram
     participant Client
-    participant Proxy as Proxy Entry (proxy.py)
-    participant Engine as WAF Engine (waf_engine.py)
-    participant LLM as AI Analyst (Client)
-    participant DB as Storage (BaseDB)
+    participant Proxy as Proxy Entry (proxy.rs)
+    participant Engine as WAF Engine (waf_engine.rs)
+    participant LLM as AI Analyst (client.rs)
+    participant DB as Storage (base.rs)
     participant Backend as Your Web Server
 
     Client->>Proxy: HTTP Request
@@ -41,11 +41,11 @@ sequenceDiagram
 
 | Module | Location | Description |
 | :--- | :--- | :--- |
-| **Proxy Gateway** | `src/api/routes/proxy.py` | Handles all routing, rate limiting, and JS challenges. |
-| **WAF Engine** | `src/core/engine/waf_engine.py` | The "brain". Implements the two-layer (Regex + AI) detection. |
-| **Storage Engine** | `src/data/storage/base.py` | A high-performance, key-value store using Msgpack with write-behind flushing. |
-| **Protocol Logic** | `src/services/proxy/forwarder.py` | Manages the connection to backend servers. |
-| **Session Replay** | `src/core/session/manager.py` | Captures rrweb snapshots for visual debugging. |
+| **Proxy Gateway** | `src/api/routes/proxy.rs` | Handles all routing, rate limiting, and JS challenges. |
+| **WAF Engine** | `src/core/engine/waf_engine.rs` | The "brain". Implements the two-layer (Regex + AI) detection. |
+| **Storage Engine** | `src/data/storage/base.rs` | A high-performance, key-value store using Msgpack with write-behind flushing. |
+| **Protocol Logic** | `src/services/proxy/forwarder.rs` | Manages the connection to backend servers. |
+| **Session Replay** | `src/core/session/manager.rs` | Captures rrweb snapshots for visual debugging. |
 
 ## 🧠 LLM Logic (The "Soul")
 
@@ -67,7 +67,7 @@ If you want to contribute, here are some great places to start:
 1.  **Performance Optimization**: Implement an asynchronous LLM queue so we don't block requests.
 2.  **Dockerization**: Help us build a modular Dockerfile.
 3.  **UI/UX**: Enhance the Dashboard visuals (built with plain JS/HTML).
-4.  **Rule Sets**: Expand the regex rules in `src/core/engine/rules.py` based on recent CVEs.
+4.  **Rule Sets**: Expand the regex rules in `src/core/engine/rules.rs` based on recent CVEs.
 
 ---
 Built with ❤️ for a safer web.
