@@ -1,19 +1,21 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::LazyLock;
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::config::settings::Settings;
 use crate::core::engine::rules::COMPILED_RULES;
+use crate::data::storage::manager::get_db;
 use crate::services::llm::client::llm_call;
 use crate::utils::http_utils::is_static_resource;
-use crate::config::settings::Settings;
-use crate::data::storage::manager::get_db;
 
-static JSON_BLOCK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"```(?:json)?\s*(\{.*?\})\s*```").expect("JSON block regex pattern is a safe literal"));
+static JSON_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"```(?:json)?\s*(\{.*?\})\s*```")
+        .expect("JSON block regex pattern is a safe literal")
+});
 
 static JSON_OBJECT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{.*?\}").expect("JSON object regex pattern is a safe literal"));
@@ -70,7 +72,7 @@ static HOST_RULE_HASH_CACHE: once_cell::sync::Lazy<DashMap<String, String>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
 /// 缓存统计信息结构体，用于跟踪 WAF 规则缓存的命中和未命中情况
-/// 
+///
 /// 该结构体记录两种缓存的统计信息：
 /// 1. 规则哈希缓存（HOST_RULE_HASH_CACHE）：存储主机规则的哈希值
 /// 2. 编译规则缓存（HOST_COMPILED_RULES）：存储已编译的正则表达式规则
@@ -155,35 +157,48 @@ pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
     if let Some(cached_hash_entry) = HOST_RULE_HASH_CACHE.get(host) {
         CACHE_STATS.hash_cache_hits.fetch_add(1, Ordering::Relaxed);
         let cached_hash = cached_hash_entry.value().clone();
-        
+
         if let Some(host_cache) = HOST_COMPILED_RULES.get(host) {
             if host_cache.hash == cached_hash {
-                CACHE_STATS.compiled_cache_hits.fetch_add(1, Ordering::Relaxed);
+                CACHE_STATS
+                    .compiled_cache_hits
+                    .fetch_add(1, Ordering::Relaxed);
                 return host_cache.compiled.clone();
             }
         }
-        
-        CACHE_STATS.compiled_cache_misses.fetch_add(1, Ordering::Relaxed);
+
+        CACHE_STATS
+            .compiled_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
     } else {
-        CACHE_STATS.hash_cache_misses.fetch_add(1, Ordering::Relaxed);
+        CACHE_STATS
+            .hash_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     let db = get_db(host);
     let security = db.ram_get("security").unwrap_or(serde_json::json!({}));
-    let waf_rules = security.get("waf_rules").cloned().unwrap_or(serde_json::json!({}));
+    let waf_rules = security
+        .get("waf_rules")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
 
     let rule_hash = compute_rule_hash(&waf_rules);
-    
+
     HOST_RULE_HASH_CACHE.insert(host.to_string(), rule_hash.clone());
 
     if let Some(host_cache) = HOST_COMPILED_RULES.get(host) {
         if host_cache.hash == rule_hash {
-            CACHE_STATS.compiled_cache_hits.fetch_add(1, Ordering::Relaxed);
+            CACHE_STATS
+                .compiled_cache_hits
+                .fetch_add(1, Ordering::Relaxed);
             return host_cache.compiled.clone();
         }
     }
 
-    CACHE_STATS.compiled_cache_misses.fetch_add(1, Ordering::Relaxed);
+    CACHE_STATS
+        .compiled_cache_misses
+        .fetch_add(1, Ordering::Relaxed);
 
     let mut compiled = HashMap::new();
     if let Some(obj) = waf_rules.as_object() {
@@ -233,40 +248,66 @@ fn compute_rule_hash(rules: &Value) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-pub fn invalidate_host_rules_cache(host: &str) {
-    HOST_RULE_HASH_CACHE.remove(host);
-    HOST_COMPILED_RULES.remove(host);
-    tracing::info!("WAF rules cache invalidated for host: {}", host);
-}
-
-pub fn invalidate_all_rules_cache() {
+pub fn invalidate_all_rules_cache() -> Result<(), String> {
     HOST_RULE_HASH_CACHE.clear();
     HOST_COMPILED_RULES.clear();
     tracing::info!("All WAF rules cache invalidated");
+    Ok(())
 }
 
 pub fn get_cache_stats() -> HashMap<String, u64> {
     let mut stats = HashMap::new();
-    stats.insert("hash_cache_hits".to_string(), CACHE_STATS.hash_cache_hits.load(Ordering::Relaxed));
-    stats.insert("hash_cache_misses".to_string(), CACHE_STATS.hash_cache_misses.load(Ordering::Relaxed));
-    stats.insert("compiled_cache_hits".to_string(), CACHE_STATS.compiled_cache_hits.load(Ordering::Relaxed));
-    stats.insert("compiled_cache_misses".to_string(), CACHE_STATS.compiled_cache_misses.load(Ordering::Relaxed));
+    stats.insert(
+        "hash_cache_hits".to_string(),
+        CACHE_STATS.hash_cache_hits.load(Ordering::Relaxed),
+    );
+    stats.insert(
+        "hash_cache_misses".to_string(),
+        CACHE_STATS.hash_cache_misses.load(Ordering::Relaxed),
+    );
+    stats.insert(
+        "compiled_cache_hits".to_string(),
+        CACHE_STATS.compiled_cache_hits.load(Ordering::Relaxed),
+    );
+    stats.insert(
+        "compiled_cache_misses".to_string(),
+        CACHE_STATS.compiled_cache_misses.load(Ordering::Relaxed),
+    );
     stats
 }
 
-pub fn preload_host_rules(host: &str) {
-    let host_string = host.to_string();
-    std::thread::spawn(move || {
-        tracing::info!("Preloading WAF rules for host: {}", host_string);
-        let _ = get_host_rules(&host_string);
-        tracing::info!("WAF rules preloaded for host: {}", host_string);
-    });
-}
+pub fn initialize_waf_cache_background(hosts: Vec<String>) {
+    tokio::task::spawn(async move {
+        let mut handles = Vec::new();
+        for host in hosts {
+            let host_string = host.clone();
+            let handle = tokio::task::spawn(async move {
+                tracing::info!("Preloading WAF rules for host: {}", host_string);
+                let _ = get_host_rules(&host_string);
+                tracing::info!("WAF rules preloaded for host: {}", host_string);
+            });
+            handles.push(handle);
+        }
 
-pub fn initialize_waf_cache(hosts: Vec<String>) {
-    for host in hosts {
-        preload_host_rules(&host);
-    }
+        let preload_timeout = tokio::time::Duration::from_secs(30);
+        let preload_result = tokio::time::timeout(preload_timeout, async {
+            for handle in handles {
+                if let Err(e) = handle.await {
+                    tracing::error!("WAF cache preloading task failed: {}", e);
+                }
+            }
+        })
+        .await;
+
+        match preload_result {
+            Ok(_) => {
+                tracing::info!("WAF cache preloading completed successfully");
+            }
+            Err(_) => {
+                tracing::error!("WAF cache preloading timed out after 30 seconds");
+            }
+        }
+    });
 }
 
 pub fn check_rules(
@@ -358,7 +399,11 @@ pub async fn detect_request(
         return DetectionResult::hacker(attack_types);
     }
 
-    let data_combined = format!("{}|{}", parsed_body, serde_json::to_string(args).unwrap_or_default());
+    let data_combined = format!(
+        "{}|{}",
+        parsed_body,
+        serde_json::to_string(args).unwrap_or_default()
+    );
     let key = cache_key(url, &data_combined);
 
     if let Some(entry) = DETECTION_CACHE.get(&key) {
@@ -374,8 +419,10 @@ pub async fn detect_request(
     let history = build_history(host, headers);
 
     let escaped_url = html_escape_for_prompt(url);
-    let escaped_headers = html_escape_for_prompt(&serde_json::to_string(headers).unwrap_or_default());
-    let escaped_cookies = html_escape_for_prompt(&serde_json::to_string(cookies).unwrap_or_default());
+    let escaped_headers =
+        html_escape_for_prompt(&serde_json::to_string(headers).unwrap_or_default());
+    let escaped_cookies =
+        html_escape_for_prompt(&serde_json::to_string(cookies).unwrap_or_default());
     let escaped_data = html_escape_for_prompt(&data_combined);
     let escaped_history = html_escape_for_prompt(&history);
 
@@ -394,7 +441,10 @@ pub async fn detect_request(
     let result = match extract_json(&raw_result) {
         Some(v) => v,
         None => {
-            tracing::error!("LLM detection failed for {} (Invalid LLM response format)", url);
+            tracing::error!(
+                "LLM detection failed for {} (Invalid LLM response format)",
+                url
+            );
             return DetectionResult::normal();
         }
     };
@@ -402,7 +452,10 @@ pub async fn detect_request(
     let detection = match serde_json::from_value::<DetectionResult>(result) {
         Ok(d) => d,
         Err(_) => {
-            tracing::error!("LLM detection failed for {} (Invalid LLM response format)", url);
+            tracing::error!(
+                "LLM detection failed for {} (Invalid LLM response format)",
+                url
+            );
             return DetectionResult::normal();
         }
     };
@@ -466,7 +519,10 @@ fn build_history(host: &str, headers: &HashMap<String, String>) -> String {
             let time = entry.get("time").and_then(|v| v.as_str()).unwrap_or("");
             let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("");
             let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            let entry_headers = entry.get("headers").cloned().unwrap_or(serde_json::json!({}));
+            let entry_headers = entry
+                .get("headers")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
             let status = entry.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
             let stuff = serde_json::json!([time, method, url, entry_headers, status]);
             history.push_str(&format!("{}. {}\n", counter, stuff));
@@ -502,7 +558,9 @@ fn parse_body(body: &[u8], content_type: &str) -> String {
         let re = Regex::new(
             r#"(?i)(filename="[^"]*".*?\r?\n\r?\n)([\s\S]{64})([\s\S]+?)(?=\r?\n--|$)"#,
         )
-        .expect("multipart form-data regex pattern is a safe literal and will never fail at runtime");
+        .expect(
+            "multipart form-data regex pattern is a safe literal and will never fail at runtime",
+        );
         re.replace_all(&raw_str, "${1}${2}\n...<Binary File Truncated>\n")
             .to_string()
     } else {
@@ -519,7 +577,8 @@ fn html_escape_for_prompt(s: &str) -> String {
 }
 
 fn optimize_for_llm(s: &str, limit: usize) -> String {
-    let re = regex::Regex::new(r"(.)\1{64,}").expect("repeated char regex pattern is a safe literal and will never fail at runtime");
+    let re = regex::Regex::new(r"(.)\1{64,}")
+        .expect("repeated char regex pattern is a safe literal and will never fail at runtime");
     let compressed = re
         .replace_all(s, "${1}${1}${1}...<Repeated Padding Removed>")
         .to_string();
@@ -558,8 +617,10 @@ fn extract_json(text: &str) -> Option<Value> {
 }
 
 pub fn start_cache_gc_worker(cache_ttl: u64, gc_interval: u64) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(gc_interval));
-        DETECTION_CACHE.retain(|_, v| v.timestamp.elapsed().as_secs() < cache_ttl);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(gc_interval));
+            DETECTION_CACHE.retain(|_, v| v.timestamp.elapsed().as_secs() < cache_ttl);
+        }
     });
 }

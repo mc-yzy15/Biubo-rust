@@ -34,6 +34,13 @@ async fn main() {
     core::engine::waf_engine::start_cache_gc_worker(cache_ttl, cache_gc_interval);
     core::security::rate_limit::start_rate_gc_worker(rate_gc_interval);
 
+    let host_count = settings.read().proxy_map.keys().count();
+    if host_count > 0 {
+        let hosts: Vec<String> = settings.read().proxy_map.keys().cloned().collect();
+        core::engine::waf_engine::initialize_waf_cache_background(hosts);
+        tracing::info!("WAF cache preloading started for {} hosts (background)", host_count);
+    }
+
     tracing::info!("Background GC workers started");
 
     let app = create_app(settings);

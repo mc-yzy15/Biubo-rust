@@ -3,10 +3,18 @@ use std::collections::HashSet;
 use crate::config::settings::IpHeaderConfig;
 
 pub static STRIP_RESP_HEADERS: &[&str] = &[
-    "connection", "keep-alive", "proxy-authenticate",
-    "proxy-authorization", "te", "trailers",
-    "transfer-encoding", "upgrade", "content-length",
-    "content-encoding", "server", "x-powered-by",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "content-encoding",
+    "server",
+    "x-powered-by",
 ];
 
 pub fn get_client_ip(headers: &axum::http::HeaderMap, config: &IpHeaderConfig) -> String {
@@ -49,8 +57,8 @@ pub fn is_static_resource(url: &str, extensions: &HashSet<String>) -> bool {
     }
 
     if !parsed.query().map(|q| q.is_empty()).unwrap_or(true) {
-        let decoded = percent_encoding::percent_decode_str(parsed.query().unwrap_or(""))
-            .decode_utf8_lossy();
+        let decoded =
+            percent_encoding::percent_decode_str(parsed.query().unwrap_or("")).decode_utf8_lossy();
         if ['<', '>', '\'', '"', '(', ')']
             .iter()
             .any(|c| decoded.contains(*c))
@@ -118,16 +126,17 @@ pub async fn get_geo_info(city: &str, country: &str) -> serde_json::Value {
                         for loc in results {
                             if loc.get("location_type").and_then(|v| v.as_str()) == Some("city") {
                                 return serde_json::json!({
-                                    "lat": loc.get("latitude").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                    "lon": loc.get("longitude").and_then(|v| v.as_f64()).unwrap_or(0.0)
+                                    "lat": loc.get("latitude").and_then(|v| v.as_f64()).expect("City latitude is missing or not a number"),
+                                    "lon": loc.get("longitude").and_then(|v| v.as_f64()).expect("City longitude is missing or not a number")
                                 });
                             }
                         }
                         for loc in results {
-                            if loc.get("location_type").and_then(|v| v.as_str()) == Some("country") {
+                            if loc.get("location_type").and_then(|v| v.as_str()) == Some("country")
+                            {
                                 return serde_json::json!({
-                                    "lat": loc.get("latitude").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                    "lon": loc.get("longitude").and_then(|v| v.as_f64()).unwrap_or(0.0)
+                                    "lat": loc.get("latitude").and_then(|v| v.as_f64()).expect("Country latitude is missing or not a number"),
+                                    "lon": loc.get("longitude").and_then(|v| v.as_f64()).expect("Country longitude is missing or not a number")
                                 });
                             }
                         }
@@ -153,7 +162,10 @@ pub async fn get_ip_reputation(ip: &str) -> bool {
         .await
     {
         Ok(resp) => match resp.json::<serde_json::Value>().await {
-            Ok(v) => v.get("safe").and_then(|s| s.as_bool()).unwrap_or(false),
+            Ok(v) => v
+                .get("safe")
+                .and_then(|s| s.as_bool())
+                .expect("IP reputation safe field is missing or not a boolean"),
             Err(e) => {
                 tracing::warn!("get_ip_reputation failed for {}: {}", ip, e);
                 false
@@ -177,7 +189,10 @@ pub async fn verify_captcha(ticket: &str) -> bool {
         .await
     {
         Ok(resp) => match resp.json::<serde_json::Value>().await {
-            Ok(v) => v.get("success").and_then(|s| s.as_bool()).unwrap_or(false),
+            Ok(v) => v
+                .get("success")
+                .and_then(|s| s.as_bool())
+                .expect("Captcha success field is missing or not a boolean"),
             Err(e) => {
                 tracing::error!("Captcha verification failed: {}", e);
                 false
@@ -199,18 +214,44 @@ pub fn get_source_from_referer(referer: &str) -> String {
     let referer_lower = referer.to_lowercase();
 
     let search_engines = [
-        "google.", "bing.", "baidu.", "duckduckgo.", "yahoo.",
-        "yandex.", "sogou.", "so.com", "360.cn", "naver.",
-        "daum.", "ask.", "ecosia.", "brave.com/search",
+        "google.",
+        "bing.",
+        "baidu.",
+        "duckduckgo.",
+        "yahoo.",
+        "yandex.",
+        "sogou.",
+        "so.com",
+        "360.cn",
+        "naver.",
+        "daum.",
+        "ask.",
+        "ecosia.",
+        "brave.com/search",
     ];
 
     let social_networks = [
-        "twitter.", "t.co", "x.com",
-        "facebook.", "fb.com", "instagram.",
-        "linkedin.", "weibo.", "wechat.", "wx.qq.com",
-        "tiktok.", "douyin.", "youtube.", "youtu.be",
-        "pinterest.", "reddit.", "telegram.", "whatsapp.",
-        "line.", "discord.", "snapchat.",
+        "twitter.",
+        "t.co",
+        "x.com",
+        "facebook.",
+        "fb.com",
+        "instagram.",
+        "linkedin.",
+        "weibo.",
+        "wechat.",
+        "wx.qq.com",
+        "tiktok.",
+        "douyin.",
+        "youtube.",
+        "youtu.be",
+        "pinterest.",
+        "reddit.",
+        "telegram.",
+        "whatsapp.",
+        "line.",
+        "discord.",
+        "snapchat.",
     ];
 
     if search_engines.iter().any(|s| referer_lower.contains(s)) {

@@ -74,57 +74,61 @@ impl Database {
 
         let handle = thread::Builder::new()
             .name("db-write-behind".into())
-            .spawn(move || {
-                loop {
-                    if flusher_stop.load(Ordering::Acquire) {
-                        break;
+            .spawn(move || loop {
+                if flusher_stop.load(Ordering::Acquire) {
+                    break;
+                }
+                thread::sleep(flush_interval);
+                if flusher_stop.load(Ordering::Acquire) {
+                    break;
+                }
+                if !flusher_dirty.load(Ordering::Acquire) {
+                    continue;
+                }
+                let Ok(guard) = flusher_data.lock() else {
+                    continue;
+                };
+                if !flusher_dirty.load(Ordering::Relaxed) {
+                    continue;
+                }
+                if flusher_auto_backup {
+                    let _ = create_backup_impl(&flusher_path, flusher_max_backup);
+                }
+                match write_to_disk_impl(&guard, &flusher_path) {
+                    Ok(()) => {
+                        flusher_dirty.store(false, Ordering::Release);
                     }
-                    thread::sleep(flush_interval);
-                    if flusher_stop.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if !flusher_dirty.load(Ordering::Acquire) {
-                        continue;
-                    }
-                    let Ok(guard) = flusher_data.lock() else {
-                        continue;
-                    };
-                    if !flusher_dirty.load(Ordering::Relaxed) {
-                        continue;
-                    }
-                    if flusher_auto_backup {
-                        let _ = create_backup_impl(&flusher_path, flusher_max_backup);
-                    }
-                    match write_to_disk_impl(&guard, &flusher_path) {
-                        Ok(()) => {
-                            flusher_dirty.store(false, Ordering::Release);
-                        }
-                        Err(e) => {
-                            tracing::error!("[WriteBehind] Flush error: {}", e);
-                        }
+                    Err(e) => {
+                        tracing::error!("[WriteBehind] Flush error: {}", e);
                     }
                 }
             })
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        *db.flusher_handle.lock().unwrap() = Some(handle);
+        *db.flusher_handle
+            .lock()
+            .expect("flusher_handle lock failed") = Some(handle);
 
         Ok(db)
     }
 
     pub fn get(&self, key: &str) -> Option<serde_json::Value> {
-        self.data.lock().unwrap().get(key).cloned()
+        self.data
+            .lock()
+            .expect("data lock failed")
+            .get(key)
+            .cloned()
     }
 
     pub fn set(&self, key: &str, value: serde_json::Value) {
-        let mut guard = self.data.lock().unwrap();
+        let mut guard = self.data.lock().expect("Failed to lock database");
         guard.insert(key.to_string(), value);
         self.dirty.store(true, Ordering::Release);
     }
 
     #[allow(dead_code)]
     pub fn delete(&self, key: &str) -> bool {
-        let mut guard = self.data.lock().unwrap();
+        let mut guard = self.data.lock().expect("Failed to lock database");
         let removed = guard.remove(key).is_some();
         if removed {
             self.dirty.store(true, Ordering::Release);
@@ -134,22 +138,28 @@ impl Database {
 
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.data.lock().unwrap().len()
+        self.data.lock().expect("Failed to lock database").len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.data.lock().unwrap().is_empty()
+        self.data
+            .lock()
+            .expect("Failed to lock database")
+            .is_empty()
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
-        self.data.lock().unwrap().contains_key(key)
+        self.data
+            .lock()
+            .expect("Failed to lock database")
+            .contains_key(key)
     }
 
     pub fn flush(&self) -> std::io::Result<()> {
         if !self.dirty.load(Ordering::Acquire) {
             return Ok(());
         }
-        let guard = self.data.lock().unwrap();
+        let guard = self.data.lock().expect("Database lock poisoned");
         if !self.dirty.load(Ordering::Relaxed) {
             return Ok(());
         }

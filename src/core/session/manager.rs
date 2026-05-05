@@ -242,7 +242,7 @@ fn flush_session(sid: &str, session: &Session) {
             let rrweb_val = log_value
                 .get("rrweb")
                 .cloned()
-                .expect("rrweb field is missing or not an array");
+                .unwrap_or(serde_json::json!([]));
             if rrweb_val.is_array() && !rrweb_val.as_array().unwrap().is_empty() {
                 let arr = rrweb_val.as_array().unwrap();
                 let first_ts = arr[0]

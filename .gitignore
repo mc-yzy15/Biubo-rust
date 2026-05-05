@@ -10,3 +10,6 @@ AGENTS.md
 # Added by cargo
 
 /target
+
+# Docker
+.dockerignore

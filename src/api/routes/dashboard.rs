@@ -31,6 +31,7 @@ pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/dashboard/api/login", post(api_login))
         .route("/dashboard/api/logout", post(api_logout))
         .route("/api/biubo/config", get(get_config).post(update_config))
+        .route("/api/biubo/dashboard/cache-stats", get(cache_stats))
         .route("/api/biubo/dashboard/proxy-map", get(proxy_map))
 }
 
@@ -113,6 +114,9 @@ async fn update_config(
         settings.llm_base_url = v;
     }
     settings.save_config();
+    if let Err(e) = crate::core::engine::waf_engine::invalidate_all_rules_cache() {
+        tracing::error!("Failed to invalidate WAF rules cache after config update: {}", e);
+    }
     Json(json!({"status": "success"})).into_response()
 }
 
@@ -121,6 +125,15 @@ async fn proxy_map(State(state): State<Arc<AppState>>) -> Response {
     Json(json!({
         "status": "success",
         "data": s.proxy_map
+    }))
+    .into_response()
+}
+
+async fn cache_stats() -> Response {
+    let stats = crate::core::engine::waf_engine::get_cache_stats();
+    Json(json!({
+        "status": "success",
+        "data": stats
     }))
     .into_response()
 }
