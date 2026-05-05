@@ -288,11 +288,10 @@ impl ProxyDB {
             None => return false,
         };
 
-        let expire_val = record.get("expire");
-        if expire_val.is_none() {
-            return true;
-        }
-        let expire_val = expire_val.unwrap();
+        let expire_val = match record.get("expire") {
+            Some(val) => val,
+            None => return true,
+        };
 
         if expire_val.is_null() {
             return true;

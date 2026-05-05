@@ -1,0 +1,198 @@
+name: Build and Release (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0-alpha.1)'
+        required: true
+        type: string
+      release_type:
+        description: 'Release type: alpha, nightly, weekly, beta, stable, lts'
+        required: true
+        type: string
+      make_latest:
+        description: 'Mark this release as the latest release (true/false)'
+        required: false
+        type: string
+        default: 'false'
+      retention_days:
+        description: 'Number of days to retain build artifacts'
+        required: false
+        type: number
+        default: 30
+
+env:
+  CARGO_TERM_COLOR: always
+  PROJECT_NAME: biubo-waf
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }} - ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+            archive_cmd: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            archive_cmd: tar
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+            archive_cmd: tar
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/index
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-index-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target/${{ matrix.target }}/release
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Determine binary name
+        id: binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            echo "name=${{ env.PROJECT_NAME }}.exe" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ env.PROJECT_NAME }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create archive
+        shell: bash
+        run: |
+          BINARY_NAME="${{ steps.binary.outputs.name }}"
+          ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}"
+
+          mkdir -p dist
+
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cd "target/${{ matrix.target }}/release"
+            zip "../../../../../dist/${ARTIFACT_NAME}.zip" "$BINARY_NAME"
+          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            cd "target/${{ matrix.target }}/release"
+            tar czf "../../../../../dist/${ARTIFACT_NAME}.tar.gz" "$BINARY_NAME"
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            cd "target/${{ matrix.target }}/release"
+            tar czf "../../../../../dist/${ARTIFACT_NAME}.tar.gz" "$BINARY_NAME"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}
+          path: dist/*
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+
+  create-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: ${{ env.PROJECT_NAME }}-*
+          merge-multiple: false
+
+      - name: Generate release notes
+        id: release_notes
+        shell: bash
+        run: |
+          TAG_NAME="v${{ inputs.version }}"
+
+          echo "## Release: $TAG_NAME" > release_notes.md
+          echo "" >> release_notes.md
+          echo "**Release Type:** ${{ inputs.release_type }}" >> release_notes.md
+          echo "" >> release_notes.md
+
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 "$TAG_NAME"^ 2>/dev/null || echo "")
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "## Changes since $PREVIOUS_TAG" >> release_notes.md
+            echo "" >> release_notes.md
+            git log "$PREVIOUS_TAG"..HEAD --pretty=format:"- %s (%h)" --no-merges >> release_notes.md
+          else
+            echo "## Initial Release" >> release_notes.md
+            echo "" >> release_notes.md
+            git log --pretty=format:"- %s (%h)" --no-merges | head -50 >> release_notes.md
+          fi
+
+          echo "" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "## Supported Platforms" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "| Platform | Architecture | File Format |" >> release_notes.md
+          echo "|----------|--------------|-------------|" >> release_notes.md
+          echo "| Windows | x86_64 | ZIP |" >> release_notes.md
+          echo "| Linux | x86_64 | TAR.GZ |" >> release_notes.md
+          echo "| macOS | x86_64 | TAR.GZ |" >> release_notes.md
+
+          cat release_notes.md
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find release-artifacts -type f -exec cp {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: ${{ env.PROJECT_NAME }} v${{ inputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ inputs.release_type != 'stable' && inputs.release_type != 'lts' }}
+          make_latest: ${{ inputs.make_latest }}
+          files: release-assets/*
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

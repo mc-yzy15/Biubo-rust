@@ -129,7 +129,6 @@ pub fn update_rrweb_events(request_id: &str, host: &str, events: Vec<serde_json:
 
     if let Some(mut session) = SESSIONS.get_mut(request_id) {
         session.timestamp = std::time::Instant::now();
-        session.log.rrweb = serde_json::json!([]);
     }
 
     let db = get_db(host);
@@ -168,11 +167,12 @@ pub fn update_rrweb_events(request_id: &str, host: &str, events: Vec<serde_json:
         }
     }
 
-    existing_events.extend(events);
+    existing_events.extend(events.clone());
 
     if !existing_events.is_empty() {
-        let first_ts = existing_events[0]
-            .get("timestamp")
+        let first_ts = existing_events
+            .first()
+            .and_then(|v| v.get("timestamp"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
         let last_ts = existing_events
@@ -194,7 +194,13 @@ pub fn update_rrweb_events(request_id: &str, host: &str, events: Vec<serde_json:
 
 fn flush_session(sid: &str, session: &Session) {
     let log = session.log.clone();
-    let mut log_value = serde_json::to_value(&log).unwrap_or(serde_json::json!({}));
+    let mut log_value = match serde_json::to_value(&log) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("[SessionManager] Failed to serialize log entry for {}: {}", sid, e);
+            serde_json::json!({})
+        }
+    };
 
     if log.country.is_empty() {
         let rt = tokio::runtime::Builder::new_current_thread()

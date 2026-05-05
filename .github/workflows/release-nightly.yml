@@ -1,0 +1,38 @@
+name: Release - Nightly
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  compute-version:
+    name: Compute Nightly Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute nightly version
+        id: version
+        shell: bash
+        run: |
+          BASE_VERSION=$(grep '^version = ' Cargo.toml | head -n 1 | sed 's/version = "\(.*\)"/\1/' | sed 's/-.*//')
+          DATE=$(date -u +%Y%m%d)
+          VERSION="${BASE_VERSION}-nightly.${DATE}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+  release:
+    name: Create Nightly Release
+    needs: [compute-version]
+    uses: ./.github/workflows/_build-release.yml
+    with:
+      version: ${{ needs.compute-version.outputs.version }}
+      release_type: nightly
+      make_latest: false
+      retention_days: 90

@@ -3,16 +3,17 @@ use std::collections::HashMap;
 use crate::config::settings::Settings;
 use crate::utils::http_utils::STRIP_RESP_HEADERS;
 
-static HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> = once_cell::sync::Lazy::new(|| {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(30))
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .pool_max_idle_per_host(20)
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .build()
-        .expect("Failed to build HTTP client")
-});
+static HTTP_CLIENT: once_cell::sync::Lazy<Result<reqwest::Client, String>> =
+    once_cell::sync::Lazy::new(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .pool_max_idle_per_host(20)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))
+    });
 
 const WSGI_FORBIDDEN_HEADERS: &[&str] = &[
     "connection",
@@ -42,10 +43,14 @@ pub async fn forward_request(
     query_string: Option<&str>,
     settings: &Settings,
 ) -> Result<ForwardResult, Box<dyn std::error::Error + Send + Sync>> {
+    let trimmed_path = path.trim_start_matches('/');
+    let path_segment = if trimmed_path.is_empty() { "" } else { trimmed_path };
+    let separator = if path_segment.is_empty() { "" } else { "/" };
     let target_url = format!(
-        "{}/{}{}",
+        "{}{}{}{}",
         target_base.trim_end_matches('/'),
-        path.trim_start_matches('/'),
+        separator,
+        path_segment,
         query_string.map(|q| format!("?{}", q)).unwrap_or_default()
     );
 
@@ -67,14 +72,25 @@ pub async fn forward_request(
         "gzip, deflate, br".to_string(),
     );
 
-    let mut req_builder = HTTP_CLIENT.request(method.parse::<reqwest::Method>()?, &target_url);
+    let client = HTTP_CLIENT.as_ref().map_err(|e| {
+        let err: Box<dyn std::error::Error + Send + Sync> =
+            format!("HTTP client initialization failed: {}", e).into();
+        err
+    })?;
+
+    let mut req_builder = client.request(method.parse::<reqwest::Method>()?, &target_url);
 
     for (key, value) in &req_headers {
         req_builder = req_builder.header(key.as_str(), value.as_str());
     }
 
-    for (key, value) in cookies {
-        req_builder = req_builder.header("Cookie", format!("{}={}", key, value));
+    if !cookies.is_empty() {
+        let cookie_header = cookies
+            .iter()
+            .map(|(key, value)| format!("{}={}", key, value))
+            .collect::<Vec<_>>()
+            .join("; ");
+        req_builder = req_builder.header("Cookie", &cookie_header);
     }
 
     req_builder = req_builder.body(data.to_vec());

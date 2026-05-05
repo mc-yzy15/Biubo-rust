@@ -49,22 +49,27 @@ pub async fn check_rate_limit(ip: &str, host: &str, settings: &Settings) -> Rate
             })
             .clone();
 
-        let mut entry = entry.lock();
+        let current_count = {
+            let mut guard = entry.lock();
 
-        while let Some(&front) = entry.timestamps.front() {
-            if now.duration_since(front).as_secs_f64() > 1.0 {
-                entry.timestamps.pop_front();
-            } else {
-                break;
+            while let Some(&front) = guard.timestamps.front() {
+                if now.duration_since(front).as_secs_f64() > 1.0 {
+                    guard.timestamps.pop_front();
+                } else {
+                    break;
+                }
             }
-        }
 
-        let current_count = entry.timestamps.len();
+            let count = guard.timestamps.len();
+            if count >= settings.rate_ban_threshold as usize {
+                guard.timestamps.clear();
+            } else {
+                guard.timestamps.push_back(now);
+            }
+            count
+        };
 
         if current_count >= settings.rate_ban_threshold as usize {
-            entry.timestamps.clear();
-            drop(entry);
-
             db.ban_ip(
                 ip,
                 "Rate limit exceeded (Ban)",
@@ -78,7 +83,6 @@ pub async fn check_rate_limit(ip: &str, host: &str, settings: &Settings) -> Rate
             };
         }
 
-        entry.timestamps.push_back(now);
         current_count + 1
     };
 

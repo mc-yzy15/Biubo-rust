@@ -1,0 +1,70 @@
+name: Release - Stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Custom version (e.g., 1.0.0). Leave empty to read from Cargo.toml.'
+        type: string
+        required: false
+        default: ''
+      generate_notes:
+        description: 'Auto-generate release notes'
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        run: cargo test --all-features
+
+  compute-version:
+    name: Compute Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=$(grep '^version = ' Cargo.toml | head -n 1 | sed 's/version = "\(.*\)"/\1/' | sed 's/-.*//')
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+  release:
+    name: Create Stable Release
+    needs: [test, compute-version]
+    uses: ./.github/workflows/_build-release.yml
+    with:
+      version: ${{ needs.compute-version.outputs.version }}
+      release_type: stable
+      make_latest: true
+      retention_days: 0

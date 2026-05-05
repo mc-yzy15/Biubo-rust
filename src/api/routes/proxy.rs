@@ -11,28 +11,29 @@ use crate::utils::compression::decode_content;
 use crate::utils::http_utils::{get_client_ip, get_ip_reputation, is_static_resource};
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Extension, Request};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use url::form_urlencoded;
 
 static STRIKE_COUNTER: once_cell::sync::Lazy<DashMap<String, u32>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
-pub fn router(state: Arc<AppState>) -> Router {
+pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/{*path}", get(reverse_proxy))
         .route("/", get(reverse_proxy))
-        .fallback(reverse_proxy)
-        .layer(Extension(state))
+        .with_state(state)
 }
 
+#[axum::debug_handler]
 async fn reverse_proxy(
-    Extension(state): Extension<Arc<AppState>>,
-    req: Request,
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
 ) -> Response {
     let (
         host,
@@ -147,14 +148,24 @@ async fn reverse_proxy(
     };
 
     let decoded_body = {
-        let body_bytes = axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024)
-            .await
-            .unwrap_or_default()
-            .to_vec();
-        if body_bytes.is_empty() {
-            Vec::new()
-        } else {
-            decode_content(&body_bytes, &content_encoding)
+        let body_result = axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await;
+        match body_result {
+            Ok(bytes) => {
+                let body_bytes = bytes.to_vec();
+                if body_bytes.is_empty() {
+                    Vec::new()
+                } else {
+                    decode_content(&body_bytes, &content_encoding)
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Request body read failed (possible attack or oversized payload): {} from {}",
+                    e,
+                    client_ip
+                );
+                Vec::new()
+            }
         }
     };
 
@@ -246,10 +257,8 @@ async fn reverse_proxy(
 
         let mut args_map = HashMap::new();
         if let Some(ref qs) = query_string {
-            for pair in qs.split('&') {
-                if let Some((k, v)) = pair.split_once('=') {
-                    args_map.insert(k.to_string(), v.to_string());
-                }
+            for (key, value) in form_urlencoded::parse(qs.as_bytes()) {
+                args_map.insert(key.into_owned(), value.into_owned());
             }
         }
 
@@ -358,10 +367,16 @@ async fn reverse_proxy(
         response = response.header(key.as_str(), value.as_str());
     }
 
-    response
-        .body(Body::from(final_content))
-        .unwrap()
-        .into_response()
+    match response.body(Body::from(final_content)) {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!("Failed to build response: {}", e);
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("Internal Server Error"))
+                .expect("Failed to build error response")
+        }
+    }
 }
 
 fn extract_headers(headers: &HeaderMap) -> HashMap<String, String> {

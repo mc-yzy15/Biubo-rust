@@ -32,8 +32,23 @@ pub fn create_app(settings: SharedSettings) -> Router {
                 .filter_map(|o| o.parse().ok())
                 .collect::<Vec<_>>(),
         )
-        .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any);
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+            axum::http::Method::PATCH,
+            axum::http::Method::HEAD,
+        ])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::ACCEPT,
+            axum::http::header::ORIGIN,
+            axum::http::HeaderName::from_static("x-requested-with"),
+            axum::http::header::COOKIE,
+        ]);
 
     let internal_routes = routes::internal::router(state.clone());
     let dashboard_routes = routes::dashboard::router(state.clone());

@@ -8,7 +8,7 @@ pub fn get_challenge_token(ip: &str, user_agent: &str, secret: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-        / 3600;
+        / 300;
 
     let raw = format!("{}|{}|{}", ip, user_agent, ts);
 
@@ -56,7 +56,7 @@ pub fn verify_challenge_token(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-        / 3600;
+        / 300;
 
     if ts != current_ts && ts != current_ts - 1 {
         return ChallengeStatus::Expired;

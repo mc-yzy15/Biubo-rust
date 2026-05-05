@@ -1,17 +1,6 @@
 pub const VALID_FIELDS: &[&str] = &[
-    "request_id",
-    "type",
-    "attack_types",
-    "time",
-    "ip",
-    "cdn_ip",
-    "country",
-    "city",
-    "fingerprint",
-    "method",
-    "url",
-    "headers",
-    "content",
+    "request_id", "type", "attack_types", "time", "ip", "cdn_ip",
+    "country", "city", "fingerprint", "method", "url", "headers", "content",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,11 +70,7 @@ pub fn evaluate(node: &AstNode, record: &serde_json::Value) -> bool {
         }
         AstNode::Not(operand) => !evaluate(operand, record),
         AstNode::Field { field, op, value } => {
-            let actual_field = if field == "content" {
-                "data"
-            } else {
-                field.as_str()
-            };
+            let actual_field = if field == "content" { "data" } else { field.as_str() };
             let raw_val = record.get(actual_field);
             let rec_str = flatten(raw_val);
             let is_container = raw_val
@@ -97,7 +82,11 @@ pub fn evaluate(node: &AstNode, record: &serde_json::Value) -> bool {
                     if let FieldValue::Str(pattern) = value {
                         let escaped = regex::escape(pattern).replace(r"\*", ".*");
                         let re = regex::Regex::new(&format!("(?i)^{}$", escaped)).unwrap();
-                        re.is_match(&rec_str)
+                        if is_container {
+                            re.is_match(&rec_str)
+                        } else {
+                            re.is_match(&rec_str)
+                        }
                     } else {
                         false
                     }
@@ -116,7 +105,9 @@ pub fn evaluate(node: &AstNode, record: &serde_json::Value) -> bool {
                                 .iter()
                                 .any(|v| rec_str.to_lowercase().contains(&v.to_lowercase()))
                         } else {
-                            values.iter().any(|v| v.eq_ignore_ascii_case(&rec_str))
+                            values
+                                .iter()
+                                .any(|v| v.eq_ignore_ascii_case(&rec_str))
                         }
                     } else {
                         false
@@ -124,7 +115,8 @@ pub fn evaluate(node: &AstNode, record: &serde_json::Value) -> bool {
                 }
                 FieldOp::Range => {
                     if let FieldValue::Range(start, end) = value {
-                        rec_str.as_str() >= start.as_str() && rec_str.as_str() <= end.as_str()
+                        rec_str.as_str() >= start.as_str()
+                            && rec_str.as_str() <= end.as_str()
                     } else {
                         false
                     }
@@ -299,11 +291,11 @@ fn parse_field_token(raw: &str) -> Result<AstNode, String> {
 
     if rest.starts_with('"') && rest.ends_with('"') && rest.len() >= 2 {
         let inner = &rest[1..rest.len() - 1];
-        if let Some(stripped) = inner.strip_prefix('~') {
+        if inner.starts_with('~') {
             return Ok(AstNode::Field {
                 field: fname.to_lowercase(),
                 op: FieldOp::Fuzzy,
-                value: FieldValue::Str(stripped.to_string()),
+                value: FieldValue::Str(inner[1..].to_string()),
             });
         }
         return Ok(AstNode::Field {
@@ -327,11 +319,11 @@ fn parse_field_token(raw: &str) -> Result<AstNode, String> {
         });
     }
 
-    if let Some(stripped) = rest.strip_prefix('~') {
+    if rest.starts_with('~') {
         return Ok(AstNode::Field {
             field: fname.to_lowercase(),
             op: FieldOp::Fuzzy,
-            value: FieldValue::Str(stripped.to_string()),
+            value: FieldValue::Str(rest[1..].to_string()),
         });
     }
 
