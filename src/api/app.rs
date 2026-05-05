@@ -1,12 +1,12 @@
+use crate::api::routes;
+use crate::config::settings::{Settings, SharedSettings};
+use axum::Router;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
-use axum::Router;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tower_http::compression::CompressionLayer;
-use crate::config::settings::{Settings, SharedSettings};
-use crate::api::routes;
 
 pub type ErrorPages = HashMap<String, String>;
 

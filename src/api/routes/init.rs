@@ -1,12 +1,12 @@
-use std::sync::Arc;
+use crate::api::app::AppState;
+use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Json, Redirect, Response};
-use axum::Router;
 use axum::routing::{get, post};
 use serde::Deserialize;
 use serde_json::json;
-use crate::api::app::AppState;
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 struct SetupRequest {
@@ -33,8 +33,7 @@ async fn init_page(State(state): State<Arc<AppState>>) -> Response {
     let path = state.settings.read().page_root.join("init.html");
     match std::fs::read_to_string(&path) {
         Ok(content) => Html(content).into_response(),
-        Err(_) => Html("<h1>Initialization page template missing</h1>".to_string())
-            .into_response(),
+        Err(_) => Html("<h1>Initialization page template missing</h1>".to_string()).into_response(),
     }
 }
 
@@ -76,10 +75,18 @@ async fn api_setup(
         let mut settings = state.settings.write();
         settings.dashboard_password = password;
         settings.proxy_map = proxy_map;
-        if let Some(v) = payload.waf_port { settings.waf_port = v; }
-        if let Some(v) = payload.api_key { settings.api_key = v; }
-        if let Some(v) = payload.llm_base_url { settings.llm_base_url = v; }
-        if let Some(v) = payload.llm_model { settings.llm_model = v; }
+        if let Some(v) = payload.waf_port {
+            settings.waf_port = v;
+        }
+        if let Some(v) = payload.api_key {
+            settings.api_key = v;
+        }
+        if let Some(v) = payload.llm_base_url {
+            settings.llm_base_url = v;
+        }
+        if let Some(v) = payload.llm_model {
+            settings.llm_model = v;
+        }
         settings.save_config();
     }
 

@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Instant;
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
 
 use crate::config::settings::Settings;
 use crate::data::storage::manager::get_db;
@@ -10,7 +12,7 @@ struct RateEntry {
     timestamps: VecDeque<Instant>,
 }
 
-static RATE_DATA: once_cell::sync::Lazy<DashMap<String, RateEntry>> =
+static RATE_DATA: once_cell::sync::Lazy<DashMap<String, Arc<Mutex<RateEntry>>>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,11 +40,16 @@ pub async fn check_rate_limit(ip: &str, host: &str, settings: &Settings) -> Rate
     let now = Instant::now();
 
     let count = {
-        let mut entry = RATE_DATA
+        let entry = RATE_DATA
             .entry(ip.to_string())
-            .or_insert_with(|| RateEntry {
-                timestamps: VecDeque::new(),
-            });
+            .or_insert_with(|| {
+                Arc::new(Mutex::new(RateEntry {
+                    timestamps: VecDeque::new(),
+                }))
+            })
+            .clone();
+
+        let mut entry = entry.lock();
 
         while let Some(&front) = entry.timestamps.front() {
             if now.duration_since(front).as_secs_f64() > 1.0 {
@@ -97,18 +104,21 @@ pub async fn check_rate_limit(ip: &str, host: &str, settings: &Settings) -> Rate
 }
 
 pub fn start_rate_gc_worker(gc_interval: u64) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(gc_interval));
-        let now = Instant::now();
-        RATE_DATA.retain(|_, entry| {
-            while let Some(&front) = entry.timestamps.front() {
-                if now.duration_since(front).as_secs() > 2 {
-                    entry.timestamps.pop_front();
-                } else {
-                    break;
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(gc_interval));
+            let now = Instant::now();
+            RATE_DATA.retain(|_, entry| {
+                let mut entry = entry.lock();
+                while let Some(&front) = entry.timestamps.front() {
+                    if now.duration_since(front).as_secs() > 2 {
+                        entry.timestamps.pop_front();
+                    } else {
+                        break;
+                    }
                 }
-            }
-            !entry.timestamps.is_empty()
-        });
+                !entry.timestamps.is_empty()
+            });
+        }
     });
 }

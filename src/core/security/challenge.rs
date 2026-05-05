@@ -12,8 +12,8 @@ pub fn get_challenge_token(ip: &str, user_agent: &str, secret: &str) -> String {
 
     let raw = format!("{}|{}|{}", ip, user_agent, ts);
 
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(raw.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
 

@@ -1,10 +1,10 @@
+use crate::api::app::create_app;
+use crate::config::settings::{Settings, SharedSettings};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
-use crate::config::settings::{Settings, SharedSettings};
-use crate::api::app::create_app;
 
-mod config;
 mod api;
+mod config;
 mod core;
 mod data;
 mod services;
@@ -14,8 +14,7 @@ mod utils;
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 

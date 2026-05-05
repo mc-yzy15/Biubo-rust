@@ -3,17 +3,16 @@ use std::collections::HashMap;
 use crate::config::settings::Settings;
 use crate::utils::http_utils::STRIP_RESP_HEADERS;
 
-static HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> =
-    once_cell::sync::Lazy::new(|| {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .pool_max_idle_per_host(20)
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .build()
-            .expect("Failed to build HTTP client")
-    });
+static HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> = once_cell::sync::Lazy::new(|| {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .pool_max_idle_per_host(20)
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .build()
+        .expect("Failed to build HTTP client")
+});
 
 const WSGI_FORBIDDEN_HEADERS: &[&str] = &[
     "connection",
@@ -47,9 +46,7 @@ pub async fn forward_request(
         "{}/{}{}",
         target_base.trim_end_matches('/'),
         path.trim_start_matches('/'),
-        query_string
-            .map(|q| format!("?{}", q))
-            .unwrap_or_default()
+        query_string.map(|q| format!("?{}", q)).unwrap_or_default()
     );
 
     let mut req_headers = headers.clone();
@@ -65,12 +62,12 @@ pub async fn forward_request(
             }
         }
     }
-    req_headers.insert("Accept-Encoding".to_string(), "gzip, deflate, br".to_string());
-
-    let mut req_builder = HTTP_CLIENT.request(
-        method.parse::<reqwest::Method>()?,
-        &target_url,
+    req_headers.insert(
+        "Accept-Encoding".to_string(),
+        "gzip, deflate, br".to_string(),
     );
+
+    let mut req_builder = HTTP_CLIENT.request(method.parse::<reqwest::Method>()?, &target_url);
 
     for (key, value) in &req_headers {
         req_builder = req_builder.header(key.as_str(), value.as_str());

@@ -26,7 +26,10 @@ pub async fn llm_call(
     let client = reqwest::Client::new();
 
     let response = match client
-        .post(format!("{}/chat/completions", settings.llm_base_url.trim_end_matches('/')))
+        .post(format!(
+            "{}/chat/completions",
+            settings.llm_base_url.trim_end_matches('/')
+        ))
         .header("Authorization", format!("Bearer {}", settings.api_key))
         .header("Content-Type", "application/json")
         .json(&body)

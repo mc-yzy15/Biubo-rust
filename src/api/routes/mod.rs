@@ -1,4 +1,4 @@
-pub mod proxy;
 pub mod dashboard;
-pub mod internal;
 pub mod init;
+pub mod internal;
+pub mod proxy;

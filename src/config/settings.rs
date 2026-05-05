@@ -103,7 +103,10 @@ impl Default for Settings {
             rate_ban_duration_min: 60,
             rate_gc_interval: 10,
 
-            static_extensions: DEFAULT_STATIC_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
+            static_extensions: DEFAULT_STATIC_EXTENSIONS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
 
             project_root: project_root.clone(),
             db_root: project_root.join("data"),
@@ -133,10 +136,9 @@ const DEFAULT_STATIC_EXTENSIONS: &[&str] = &[
 ];
 
 const DEFAULT_UPLOAD_EXTENSIONS: &[&str] = &[
-    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", ".bmp", ".tiff",
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".csv",
-    ".zip", ".tar", ".gz", ".7z", ".rar",
-    ".mp3", ".mp4", ".wav", ".avi", ".mov", ".webm",
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", ".bmp", ".tiff", ".pdf", ".doc",
+    ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".csv", ".zip", ".tar", ".gz", ".7z",
+    ".rar", ".mp3", ".mp4", ".wav", ".avi", ".mov", ".webm",
 ];
 
 #[derive(Debug, Deserialize)]

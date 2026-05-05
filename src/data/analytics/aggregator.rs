@@ -8,7 +8,10 @@ pub fn update_analytics(db: &ProxyDB, entry: &serde_json::Value) {
     };
 
     let ip = log.get("cdn_ip").and_then(|v| v.as_str()).unwrap_or("");
-    let _fingerprint = log.get("fingerprint").and_then(|v| v.as_str()).unwrap_or("");
+    let _fingerprint = log
+        .get("fingerprint")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let is_hacker = log.get("type").and_then(|v| v.as_str()) == Some("hacker");
     let url = log.get("url").and_then(|v| v.as_str()).unwrap_or("");
     let url = extract_path(url);
@@ -16,7 +19,11 @@ pub fn update_analytics(db: &ProxyDB, entry: &serde_json::Value) {
         .get("country")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    let country = if country.is_empty() { "unknown" } else { country };
+    let country = if country.is_empty() {
+        "unknown"
+    } else {
+        country
+    };
     let ua = log
         .get("headers")
         .and_then(|h| h.get("User-Agent"))
@@ -27,9 +34,7 @@ pub fn update_analytics(db: &ProxyDB, entry: &serde_json::Value) {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    let mut analytics = db
-        .ram_get("analytics")
-        .unwrap_or(serde_json::json!({}));
+    let mut analytics = db.ram_get("analytics").unwrap_or(serde_json::json!({}));
     let log_db = db.get_log_db();
     let mut overview = log_db
         .as_ref()
@@ -49,7 +54,10 @@ pub fn update_analytics(db: &ProxyDB, entry: &serde_json::Value) {
 
     if is_hacker {
         if let Some(security) = analytics.get_mut("security") {
-            let blocked = security.get("blocked_requests").and_then(|v| v.as_u64()).unwrap_or(0);
+            let blocked = security
+                .get("blocked_requests")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             security["blocked_requests"] = serde_json::json!(blocked + 1);
 
             if let Some(attack_types) = log.get("attack_types").and_then(|v| v.as_array()) {
@@ -69,7 +77,10 @@ pub fn update_analytics(db: &ProxyDB, entry: &serde_json::Value) {
         }
 
         if let Some(security) = overview.get_mut("security") {
-            let blocked = security.get("blocked_requests").and_then(|v| v.as_u64()).unwrap_or(0);
+            let blocked = security
+                .get("blocked_requests")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             security["blocked_requests"] = serde_json::json!(blocked + 1);
 
             if let Some(attack_types) = log.get("attack_types").and_then(|v| v.as_array()) {
@@ -101,7 +112,10 @@ pub fn update_analytics(db: &ProxyDB, entry: &serde_json::Value) {
 
         if let Some(traffic) = analytics.get_mut("traffic") {
             if let Some(engagement) = traffic.get_mut("engagement") {
-                let total = engagement.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+                let total = engagement
+                    .get("total")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 engagement["total"] = serde_json::json!(total + 1);
 
                 if duration_sec <= 15 {

@@ -155,9 +155,10 @@ impl ProxyDB {
             let rid = entry.get("request_id").and_then(|v| v.as_str());
 
             if let Some(rid) = rid {
-                if let Some(pos) = logs.iter().position(|e| {
-                    e.get("request_id").and_then(|v| v.as_str()) == Some(rid)
-                }) {
+                if let Some(pos) = logs
+                    .iter()
+                    .position(|e| e.get("request_id").and_then(|v| v.as_str()) == Some(rid))
+                {
                     logs[pos] = entry;
                     db.set("logs", serde_json::json!(logs));
                     return;
@@ -261,7 +262,10 @@ impl ProxyDB {
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
 
-        if let Some(blacklist) = security.get_mut("blacklist").and_then(|v| v.as_object_mut()) {
+        if let Some(blacklist) = security
+            .get_mut("blacklist")
+            .and_then(|v| v.as_object_mut())
+        {
             if blacklist.remove(ip).is_some() {
                 self.ram_set("security", serde_json::Value::Object(security));
                 let _ = self.ram.flush();
@@ -321,7 +325,10 @@ impl ProxyDB {
                 .ram_get("security")
                 .and_then(|v| v.as_object().cloned())
                 .unwrap_or_default();
-            if let Some(bl) = security.get_mut("blacklist").and_then(|v| v.as_object_mut()) {
+            if let Some(bl) = security
+                .get_mut("blacklist")
+                .and_then(|v| v.as_object_mut())
+            {
                 bl.remove(ip);
                 self.ram_set("security", serde_json::Value::Object(security));
                 let _ = self.ram.flush();
@@ -383,7 +390,10 @@ impl ProxyDB {
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
 
-        if let Some(whitelist) = security.get_mut("whitelist").and_then(|v| v.as_object_mut()) {
+        if let Some(whitelist) = security
+            .get_mut("whitelist")
+            .and_then(|v| v.as_object_mut())
+        {
             if whitelist.remove(ip).is_some() {
                 self.ram_set("security", serde_json::Value::Object(security));
                 return true;

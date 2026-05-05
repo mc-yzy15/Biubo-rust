@@ -5,9 +5,9 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::config::settings::SharedSettings;
+use crate::data::analytics::aggregator::update_analytics;
 use crate::data::storage::base::Database;
 use crate::data::storage::manager::get_db;
-use crate::data::analytics::aggregator::update_analytics;
 use crate::utils::compression::{compress_json, decompress_json};
 use crate::utils::http_utils::get_ip_info;
 
@@ -100,7 +100,11 @@ pub fn create_session(request_id: &str, host: &str, log_entry: LogEntry) {
     SESSIONS.insert(request_id.to_string(), session);
 }
 
-pub fn update_session_log(request_id: &str, _host: &str, updates: HashMap<String, serde_json::Value>) {
+pub fn update_session_log(
+    request_id: &str,
+    _host: &str,
+    updates: HashMap<String, serde_json::Value>,
+) {
     if let Some(mut session) = SESSIONS.get_mut(request_id) {
         for (key, value) in updates {
             match key.as_str() {
@@ -176,10 +180,12 @@ pub fn update_rrweb_events(request_id: &str, host: &str, events: Vec<serde_json:
             .and_then(|e| e.get("timestamp"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
-        target_entry["duration_sec"] =
-            serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
+        target_entry["duration_sec"] = serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
         target_entry["rrweb"] = serde_json::json!(
-            String::from_utf8_lossy(&compress_json(&serde_json::json!({"events": existing_events}))).to_string()
+            String::from_utf8_lossy(&compress_json(
+                &serde_json::json!({"events": existing_events})
+            ))
+            .to_string()
         );
     }
 
@@ -227,14 +233,26 @@ fn flush_session(sid: &str, session: &Session) {
         if let Some(rrweb) = disk_rrweb {
             log_value["rrweb"] = rrweb;
         } else {
-            let rrweb_val = log_value.get("rrweb").cloned().unwrap_or(serde_json::json!([]));
+            let rrweb_val = log_value
+                .get("rrweb")
+                .cloned()
+                .unwrap_or(serde_json::json!([]));
             if rrweb_val.is_array() && !rrweb_val.as_array().unwrap().is_empty() {
                 let arr = rrweb_val.as_array().unwrap();
-                let first_ts = arr[0].get("timestamp").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let last_ts = arr.last().and_then(|e| e.get("timestamp")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                log_value["duration_sec"] = serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
+                let first_ts = arr[0]
+                    .get("timestamp")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let last_ts = arr
+                    .last()
+                    .and_then(|e| e.get("timestamp"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                log_value["duration_sec"] =
+                    serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
                 log_value["rrweb"] = serde_json::json!(
-                    String::from_utf8_lossy(&compress_json(&serde_json::json!({"events": arr}))).to_string()
+                    String::from_utf8_lossy(&compress_json(&serde_json::json!({"events": arr})))
+                        .to_string()
                 );
             } else {
                 log_value["rrweb"] = serde_json::json!("");
@@ -251,45 +269,48 @@ fn flush_session(sid: &str, session: &Session) {
 }
 
 pub fn start_session_gc_worker(session_timeout: u64, gc_interval: u64) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(gc_interval));
-        let now = std::time::Instant::now();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(gc_interval));
+            let now = std::time::Instant::now();
 
-        let expired: Vec<String> = SESSIONS
-            .iter()
-            .filter(|e| now.duration_since(e.value().timestamp).as_secs() > session_timeout)
-            .map(|e| e.key().clone())
-            .collect();
+            let expired: Vec<String> = SESSIONS
+                .iter()
+                .filter(|e| now.duration_since(e.value().timestamp).as_secs() > session_timeout)
+                .map(|e| e.key().clone())
+                .collect();
 
-        for sid in expired {
-            if let Some((_, session)) = SESSIONS.remove(&sid) {
-                let db = get_db(&session.host);
+            for sid in expired {
+                if let Some((_, session)) = SESSIONS.remove(&sid) {
+                    let db = get_db(&session.host);
 
-                if let Some(log_db) = db.get_log_db() {
-                    let logs = log_db
-                        .get("logs")
-                        .and_then(|v| v.as_array().cloned())
-                        .unwrap_or_default();
+                    if let Some(log_db) = db.get_log_db() {
+                        let logs = log_db
+                            .get("logs")
+                            .and_then(|v| v.as_array().cloned())
+                            .unwrap_or_default();
 
-                    if let Some(entry) = logs.iter().find(|e| {
-                        e.get("request_id").and_then(|v| v.as_str()) == Some(&sid)
-                    }) {
-                        let duration = entry.get("duration_sec").cloned();
-                        let mut session_log = serde_json::to_value(&session.log)
-                            .unwrap_or(serde_json::json!({}));
-                        if let Some(dur) = duration {
-                            session_log["duration_sec"] = dur;
+                        if let Some(entry) = logs
+                            .iter()
+                            .find(|e| e.get("request_id").and_then(|v| v.as_str()) == Some(&sid))
+                        {
+                            let duration = entry.get("duration_sec").cloned();
+                            let mut session_log =
+                                serde_json::to_value(&session.log).unwrap_or(serde_json::json!({}));
+                            if let Some(dur) = duration {
+                                session_log["duration_sec"] = dur;
+                            }
+
+                            let session_val = serde_json::json!({
+                                "log": session_log,
+                            });
+                            update_analytics(&db, &session_val);
                         }
-
-                        let session_val = serde_json::json!({
-                            "log": session_log,
-                        });
-                        update_analytics(&db, &session_val);
                     }
-                }
 
-                if session.dirty {
-                    flush_session(&sid, &session);
+                    if session.dirty {
+                        flush_session(&sid, &session);
+                    }
                 }
             }
         }
@@ -369,10 +390,7 @@ pub fn start_log_gc_worker(settings: SharedSettings) {
                                                     name
                                                 );
                                             } else if retained.len() < logs.len() {
-                                                db.set(
-                                                    "logs",
-                                                    serde_json::json!(retained),
-                                                );
+                                                db.set("logs", serde_json::json!(retained));
                                                 db.close();
                                                 tracing::info!(
                                                     "Pruned {} logs from {}, retained {}.",

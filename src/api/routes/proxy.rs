@@ -1,37 +1,58 @@
+use crate::api::app::AppState;
+use crate::core::engine::waf_engine::detect_request;
+use crate::core::security::challenge::{
+    ChallengeStatus, get_challenge_token, verify_challenge_token,
+};
+use crate::core::security::rate_limit::{BlockReason, check_rate_limit};
+use crate::core::session::manager::{build_log_entry, create_session};
+use crate::data::storage::manager::get_db;
+use crate::services::proxy::forwarder::forward_request;
+use crate::utils::compression::decode_content;
+use crate::utils::http_utils::{get_client_ip, get_ip_reputation, is_static_resource};
+use axum::Router;
+use axum::body::Body;
+use axum::extract::{Extension, Request};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::routing::get;
+use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use axum::body::Body;
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::Router;
-use axum::routing::any;
-use dashmap::DashMap;
-use crate::api::app::AppState;
-use crate::core::security::rate_limit::{check_rate_limit, BlockReason};
-use crate::core::security::challenge::{verify_challenge_token, get_challenge_token, ChallengeStatus};
-use crate::core::engine::waf_engine::detect_request;
-use crate::core::session::manager::{create_session, build_log_entry};
-use crate::services::proxy::forwarder::forward_request;
-use crate::utils::http_utils::{get_client_ip, is_static_resource, get_ip_reputation};
-use crate::utils::compression::decode_content;
-use crate::data::storage::manager::get_db;
 
 static STRIKE_COUNTER: once_cell::sync::Lazy<DashMap<String, u32>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
-pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
+pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/{*path}", any(reverse_proxy))
-        .route("/", any(reverse_proxy))
-        .with_state(state)
+        .route("/{*path}", get(reverse_proxy))
+        .route("/", get(reverse_proxy))
+        .fallback(reverse_proxy)
+        .layer(Extension(state))
 }
 
 async fn reverse_proxy(
-    State(state): State<Arc<AppState>>,
-    req: axum::extract::Request,
+    Extension(state): Extension<Arc<AppState>>,
+    req: Request,
 ) -> Response {
-    let (host, target_base, client_ip, user_agent, request_id, proxy_status, is_whitelisted, path, query_string, method, headers, cookies, raw_cookie_header, upload_max_size, upload_allowed_extensions, challenge_secret, content_encoding) = {
+    let (
+        host,
+        target_base,
+        client_ip,
+        user_agent,
+        request_id,
+        proxy_status,
+        is_whitelisted,
+        path,
+        query_string,
+        method,
+        headers,
+        cookies,
+        raw_cookie_header,
+        upload_max_size,
+        upload_allowed_extensions,
+        challenge_secret,
+        content_encoding,
+    ) = {
         let settings = state.settings.read();
 
         let host = req
@@ -43,7 +64,10 @@ async fn reverse_proxy(
 
         let target_base = match settings.proxy_map.get(&host) {
             Some(t) => t.clone(),
-            None => return Html(state.error_pages.get("404").cloned().unwrap_or_default()).into_response(),
+            None => {
+                return Html(state.error_pages.get("404").cloned().unwrap_or_default())
+                    .into_response();
+            }
         };
 
         let client_ip = get_client_ip(req.headers(), &settings.get_ip_from_headers);
@@ -70,7 +94,9 @@ async fn reverse_proxy(
 
         if !settings.is_initialized() {
             let p = req.uri().path().to_string();
-            if !p.starts_with("/init") && !is_static_resource(&req.uri().to_string(), &settings.static_extensions) {
+            if !p.starts_with("/init")
+                && !is_static_resource(&req.uri().to_string(), &settings.static_extensions)
+            {
                 return Redirect::temporary("/init/").into_response();
             }
         }
@@ -99,7 +125,25 @@ async fn reverse_proxy(
 
         drop(settings);
 
-        (host, target_base, client_ip, user_agent, request_id, proxy_status, is_whitelisted, path, query_string, method, headers, cookies, raw_cookie_header, upload_max_size, upload_allowed_extensions, challenge_secret, content_encoding)
+        (
+            host,
+            target_base,
+            client_ip,
+            user_agent,
+            request_id,
+            proxy_status,
+            is_whitelisted,
+            path,
+            query_string,
+            method,
+            headers,
+            cookies,
+            raw_cookie_header,
+            upload_max_size,
+            upload_allowed_extensions,
+            challenge_secret,
+            content_encoding,
+        )
     };
 
     let decoded_body = {
@@ -170,7 +214,12 @@ async fn reverse_proxy(
                         return build_captcha_response(&state, &challenge_secret);
                     }
                     *strikes.value_mut() += 1;
-                    return build_challenge_response(&state, &client_ip, &user_agent, &challenge_secret);
+                    return build_challenge_response(
+                        &state,
+                        &client_ip,
+                        &user_agent,
+                        &challenge_secret,
+                    );
                 }
                 ChallengeStatus::Valid => {}
             }
@@ -183,7 +232,12 @@ async fn reverse_proxy(
             return build_forbidden_response(&state, "403");
         }
 
-        let (file_safe, file_msg) = check_file_security(&decoded_body, &headers, upload_max_size, &upload_allowed_extensions);
+        let (file_safe, file_msg) = check_file_security(
+            &decoded_body,
+            &headers,
+            upload_max_size,
+            &upload_allowed_extensions,
+        );
         if !file_safe {
             let db = get_db(&host);
             let _ = db.ban_ip(&client_ip, &file_msg, None).await;
@@ -215,7 +269,20 @@ async fn reverse_proxy(
         };
 
         if detection.detection_type != "normal" {
-            let log_entry = build_log_entry(&request_id, &build_snapshot(&client_ip, method.as_str(), &path, &headers, &cookies, &decoded_body, &query_string), &detection, 403);
+            let log_entry = build_log_entry(
+                &request_id,
+                &build_snapshot(
+                    &client_ip,
+                    method.as_str(),
+                    &path,
+                    &headers,
+                    &cookies,
+                    &decoded_body,
+                    &query_string,
+                ),
+                &detection,
+                403,
+            );
             create_session(&request_id, &host, log_entry);
 
             if proxy_status == "on" {
@@ -254,7 +321,15 @@ async fn reverse_proxy(
     if proxy_status != "pass" {
         let log_entry = build_log_entry(
             &request_id,
-            &build_snapshot(&client_ip, method.as_str(), &path, &headers, &cookies, &decoded_body, &query_string),
+            &build_snapshot(
+                &client_ip,
+                method.as_str(),
+                &path,
+                &headers,
+                &cookies,
+                &decoded_body,
+                &query_string,
+            ),
             &crate::core::engine::waf_engine::DetectionResult::normal(),
             forward_result.status,
         );
@@ -275,13 +350,18 @@ async fn reverse_proxy(
 
     let mut response = Response::builder().status(forward_result.status);
     for (key, value) in &forward_result.headers {
-        if key.eq_ignore_ascii_case("content-length") || key.eq_ignore_ascii_case("content-encoding") {
+        if key.eq_ignore_ascii_case("content-length")
+            || key.eq_ignore_ascii_case("content-encoding")
+        {
             continue;
         }
         response = response.header(key.as_str(), value.as_str());
     }
 
-    response.body(Body::from(final_content)).unwrap().into_response()
+    response
+        .body(Body::from(final_content))
+        .unwrap()
+        .into_response()
 }
 
 fn extract_headers(headers: &HeaderMap) -> HashMap<String, String> {
@@ -334,7 +414,10 @@ fn build_snapshot(
     map.insert("url".to_string(), serde_json::json!(url));
     map.insert("headers".to_string(), serde_json::json!(headers));
     map.insert("cookies".to_string(), serde_json::json!(cookies));
-    map.insert("data".to_string(), serde_json::json!(String::from_utf8_lossy(body).to_string()));
+    map.insert(
+        "data".to_string(),
+        serde_json::json!(String::from_utf8_lossy(body).to_string()),
+    );
     if let Some(qs) = query_string {
         map.insert("args".to_string(), serde_json::json!(qs));
     }
@@ -424,16 +507,16 @@ fn build_challenge_response(
 
     (
         StatusCode::FORBIDDEN,
-        [("Set-Cookie", format!("bw_challenge={}; Path=/; HttpOnly", token))],
+        [(
+            "Set-Cookie",
+            format!("bw_challenge={}; Path=/; HttpOnly", token),
+        )],
         Html(html),
     )
         .into_response()
 }
 
-fn build_captcha_response(
-    state: &Arc<AppState>,
-    _challenge_secret: &str,
-) -> Response {
+fn build_captcha_response(state: &Arc<AppState>, _challenge_secret: &str) -> Response {
     let html = state
         .error_pages
         .get("captcha")

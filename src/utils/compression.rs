@@ -1,17 +1,15 @@
 use std::io::{Read, Write};
 
+use flate2::Compression;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::{GzEncoder, ZlibEncoder};
-use flate2::Compression;
 
 pub fn compress_json(data: &serde_json::Value) -> Vec<u8> {
     let packed = match rmp_serde::to_vec(data) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("compress_json failed: {}", e);
-            return serde_json::to_string(data)
-                .unwrap_or_default()
-                .into_bytes();
+            return serde_json::to_string(data).unwrap_or_default().into_bytes();
         }
     };
 

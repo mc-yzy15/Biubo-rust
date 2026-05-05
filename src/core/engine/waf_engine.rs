@@ -1,14 +1,14 @@
-use std::collections::HashMap;
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
+use crate::config::settings::Settings;
 use crate::core::engine::rules::COMPILED_RULES;
+use crate::data::storage::manager::get_db;
 use crate::services::llm::client::llm_call;
 use crate::utils::http_utils::is_static_resource;
-use crate::config::settings::Settings;
-use crate::data::storage::manager::get_db;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectionResult {
@@ -110,7 +110,10 @@ pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
     let db = get_db(host);
 
     let security = db.ram_get("security").unwrap_or(serde_json::json!({}));
-    let waf_rules = security.get("waf_rules").cloned().unwrap_or(serde_json::json!({}));
+    let waf_rules = security
+        .get("waf_rules")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
 
     let rule_hash = compute_rule_hash(&waf_rules);
 
@@ -257,7 +260,11 @@ pub async fn detect_request(
         return DetectionResult::hacker(attack_types);
     }
 
-    let data_combined = format!("{}|{}", parsed_body, serde_json::to_string(args).unwrap_or_default());
+    let data_combined = format!(
+        "{}|{}",
+        parsed_body,
+        serde_json::to_string(args).unwrap_or_default()
+    );
     let key = cache_key(url, &data_combined);
 
     if let Some(entry) = DETECTION_CACHE.get(&key) {
@@ -275,8 +282,14 @@ pub async fn detect_request(
     let prompt = LLM_PROMPT_TEMPLATE
         .replace("{url}", &optimize_for_llm(url, 1024))
         .replace("{method}", method)
-        .replace("{headers}", &optimize_for_llm(&serde_json::to_string(headers).unwrap_or_default(), 2048))
-        .replace("{cookies}", &optimize_for_llm(&serde_json::to_string(cookies).unwrap_or_default(), 1024))
+        .replace(
+            "{headers}",
+            &optimize_for_llm(&serde_json::to_string(headers).unwrap_or_default(), 2048),
+        )
+        .replace(
+            "{cookies}",
+            &optimize_for_llm(&serde_json::to_string(cookies).unwrap_or_default(), 1024),
+        )
         .replace("{data}", &optimize_for_llm(&data_combined, 8192))
         .replace("{history}", &history);
 
@@ -285,7 +298,10 @@ pub async fn detect_request(
     let result = match extract_json(&raw_result) {
         Some(v) => v,
         None => {
-            tracing::error!("LLM detection failed for {} (Invalid LLM response format)", url);
+            tracing::error!(
+                "LLM detection failed for {} (Invalid LLM response format)",
+                url
+            );
             return DetectionResult::normal();
         }
     };
@@ -293,7 +309,10 @@ pub async fn detect_request(
     let detection = match serde_json::from_value::<DetectionResult>(result) {
         Ok(d) => d,
         Err(_) => {
-            tracing::error!("LLM detection failed for {} (Invalid LLM response format)", url);
+            tracing::error!(
+                "LLM detection failed for {} (Invalid LLM response format)",
+                url
+            );
             return DetectionResult::normal();
         }
     };
@@ -357,7 +376,10 @@ fn build_history(host: &str, headers: &HashMap<String, String>) -> String {
             let time = entry.get("time").and_then(|v| v.as_str()).unwrap_or("");
             let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("");
             let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            let entry_headers = entry.get("headers").cloned().unwrap_or(serde_json::json!({}));
+            let entry_headers = entry
+                .get("headers")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
             let status = entry.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
             let stuff = serde_json::json!([time, method, url, entry_headers, status]);
             history.push_str(&format!("{}. {}\n", counter, stuff));
@@ -390,11 +412,10 @@ fn parse_body(body: &[u8], content_type: &str) -> String {
         String::from_utf8_lossy(safe_body).to_string()
     } else if content_type.contains("multipart/form-data") {
         let raw_str = String::from_utf8_lossy(safe_body).to_string();
-        let re = Regex::new(
-            r#"(?i)(filename="[^"]*".*?\r?\n\r?\n)([\s\S]{64})([\s\S]+?)(?=\r?\n--|$)"#,
-        )
-        .unwrap();
-        re.replace_all(&raw_str, "${1}${2}\n...<Binary File Truncated>\n")
+        let re =
+            Regex::new(r#"(?i)(filename="[^"]*".*?\r?\n\r?\n)([\s\S]{64})([\s\S]+?)(\r?\n--|$)"#)
+                .unwrap();
+        re.replace_all(&raw_str, "${1}${2}\n...<Binary File Truncated>\n${4}")
             .to_string()
     } else {
         String::from_utf8_lossy(safe_body).to_string()
@@ -402,16 +423,38 @@ fn parse_body(body: &[u8], content_type: &str) -> String {
 }
 
 fn optimize_for_llm(s: &str, limit: usize) -> String {
-    let re = regex::Regex::new(r"(.)\1{64,}").unwrap();
-    let compressed = re
-        .replace_all(s, "${1}${1}${1}...<Repeated Padding Removed>")
-        .to_string();
+    let compressed = compress_repeated_chars(s, 64);
 
     if compressed.len() <= limit {
         compressed
     } else {
         format!("{}...<Hard Truncated>", &compressed[..limit])
     }
+}
+
+fn compress_repeated_chars(s: &str, threshold: usize) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        let mut count = 1;
+        while chars.peek() == Some(&ch) {
+            chars.next();
+            count += 1;
+        }
+        if count >= threshold {
+            result.push(ch);
+            result.push(ch);
+            result.push(ch);
+            result.push_str("...<Repeated Padding Removed>");
+        } else {
+            for _ in 0..count {
+                result.push(ch);
+            }
+        }
+    }
+
+    result
 }
 
 fn extract_json(text: &str) -> Option<Value> {
@@ -447,8 +490,10 @@ fn extract_json(text: &str) -> Option<Value> {
 }
 
 pub fn start_cache_gc_worker(cache_ttl: u64, gc_interval: u64) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(gc_interval));
-        DETECTION_CACHE.retain(|_, v| v.timestamp.elapsed().as_secs() < cache_ttl);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(gc_interval));
+            DETECTION_CACHE.retain(|_, v| v.timestamp.elapsed().as_secs() < cache_ttl);
+        }
     });
 }

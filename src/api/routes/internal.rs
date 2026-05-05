@@ -1,15 +1,15 @@
-use std::sync::Arc;
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Json, Response};
-use axum::Router;
-use axum::routing::{get, post};
-use serde::Deserialize;
-use serde_json::{json, Value};
 use crate::api::app::AppState;
 use crate::data::storage::manager::get_db;
 use crate::utils::compression::decompress_json;
-use crate::utils::query_parser::{parse, evaluate};
+use crate::utils::query_parser::{evaluate, parse};
+use axum::Router;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Json, Response};
+use axum::routing::{get, post};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 struct GreetingRequest {
@@ -116,11 +116,7 @@ async fn beacon(State(state): State<Arc<AppState>>) -> Response {
             content,
         )
             .into_response(),
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            "console.error('Beacon JS missing')",
-        )
-            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "console.error('Beacon JS missing')").into_response(),
     }
 }
 
@@ -141,10 +137,18 @@ async fn greeting(
 
     if let Some(ip) = &payload.ip {
         let info = crate::utils::http_utils::get_ip_info(ip).await;
-        if let Some(country) = info.get("country").or(info.get("countryName")).and_then(|v| v.as_str()) {
+        if let Some(country) = info
+            .get("country")
+            .or(info.get("countryName"))
+            .and_then(|v| v.as_str())
+        {
             updates.insert("country".to_string(), serde_json::json!(country));
         }
-        if let Some(city) = info.get("city").or(info.get("cityName")).and_then(|v| v.as_str()) {
+        if let Some(city) = info
+            .get("city")
+            .or(info.get("cityName"))
+            .and_then(|v| v.as_str())
+        {
             updates.insert("city".to_string(), serde_json::json!(city));
         }
         updates.insert("cdn_ip".to_string(), serde_json::json!(ip));
@@ -257,19 +261,28 @@ async fn waf_setting(
     let db = get_db(host);
 
     if let Some(description) = payload.get("description").and_then(|v| v.as_str()) {
-        let mut site = db.ram_get("site").and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        let mut site = db
+            .ram_get("site")
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
         site.insert("description".into(), json!(description));
         db.ram_set("site", Value::Object(site));
     }
 
     if let Some(domain) = payload.get("domain").and_then(|v| v.as_str()) {
-        let mut site = db.ram_get("site").and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        let mut site = db
+            .ram_get("site")
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
         site.insert("domain".into(), json!(domain));
         db.ram_set("site", Value::Object(site));
     }
 
     if let Some(status) = payload.get("status").and_then(|v| v.as_str()) {
-        let mut site = db.ram_get("site").and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        let mut site = db
+            .ram_get("site")
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
         site.insert("status".into(), json!(status));
         db.ram_set("site", Value::Object(site));
     }
@@ -288,10 +301,22 @@ async fn server_location(State(_state): State<Arc<AppState>>) -> Response {
         Err(_) => json!({}),
     };
 
-    let ip = ip_info.get("ip").and_then(|v| v.as_str()).unwrap_or("unknown");
-    let country = ip_info.get("country").and_then(|v| v.as_str()).unwrap_or("unknown");
-    let city = ip_info.get("city").and_then(|v| v.as_str()).unwrap_or("unknown");
-    let region = ip_info.get("region").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let ip = ip_info
+        .get("ip")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let country = ip_info
+        .get("country")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let city = ip_info
+        .get("city")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let region = ip_info
+        .get("region")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
 
     Json(json!({
         "status": "success",
@@ -327,12 +352,11 @@ async fn geocode(Query(query): Query<GeocodeQuery>) -> Response {
     Json(json!({"status": "success", "data": info})).into_response()
 }
 
-async fn waf_log(
-    State(_state): State<Arc<AppState>>,
-    Query(query): Query<DateQuery>,
-) -> Response {
+async fn waf_log(State(_state): State<Arc<AppState>>, Query(query): Query<DateQuery>) -> Response {
     let host = query.host.unwrap_or_default();
-    let _date = query.date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    let _date = query
+        .date
+        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
 
     if host.is_empty() {
         return Json(json!({"status": "error", "msg": "host required"})).into_response();
@@ -346,7 +370,10 @@ async fn waf_log(
         None => return Json(json!({"status": "success", "data": []})).into_response(),
     };
 
-    let logs = log_db.get("logs").and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let logs = log_db
+        .get("logs")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
     let overview = log_db.get("overview").unwrap_or(json!({}));
 
     Json(json!({
@@ -376,10 +403,17 @@ async fn waf_rrweb(
         None => return Json(json!({"status": "success", "data": null})).into_response(),
     };
 
-    let logs = log_db.get("logs").and_then(|v| v.as_array().cloned()).unwrap_or_default();
-    let entry = logs.iter().find(|e| e.get("request_id").and_then(|v| v.as_str()) == Some(&id));
+    let logs = log_db
+        .get("logs")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    let entry = logs
+        .iter()
+        .find(|e| e.get("request_id").and_then(|v| v.as_str()) == Some(&id));
 
-    let rrweb = entry.and_then(|e| e.get("rrweb").cloned()).unwrap_or(json!(null));
+    let rrweb = entry
+        .and_then(|e| e.get("rrweb").cloned())
+        .unwrap_or(json!(null));
 
     let events = if rrweb.is_string() {
         let bytes = rrweb.as_str().unwrap_or("").as_bytes();
@@ -411,7 +445,10 @@ async fn waf_search(
         None => return Json(json!({"status": "success", "data": []})).into_response(),
     };
 
-    let logs = log_db.get("logs").and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let logs = log_db
+        .get("logs")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
 
     if statement.is_empty() {
         return Json(json!({"status": "success", "data": logs})).into_response();
@@ -420,7 +457,8 @@ async fn waf_search(
     let ast = match parse(&statement) {
         Ok(a) => a,
         Err(e) => {
-            return Json(json!({"status": "error", "msg": format!("Parse error: {}", e)})).into_response();
+            return Json(json!({"status": "error", "msg": format!("Parse error: {}", e)}))
+                .into_response();
         }
     };
 

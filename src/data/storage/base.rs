@@ -27,11 +27,7 @@ impl Database {
         flush_interval: Duration,
     ) -> std::io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let path = if path
-            .extension()
-            .map(|e| e != MSGPACK_EXT)
-            .unwrap_or(true)
-        {
+        let path = if path.extension().map(|e| e != MSGPACK_EXT).unwrap_or(true) {
             path.with_extension(MSGPACK_EXT)
         } else {
             path
@@ -180,8 +176,8 @@ fn write_to_disk_impl(
     data: &HashMap<String, serde_json::Value>,
     path: &Path,
 ) -> std::io::Result<()> {
-    let encoded = rmp_serde::to_vec(data)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let encoded =
+        rmp_serde::to_vec(data).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let tmp_path = path.with_extension("tmp");
     {
         let mut file = fs::File::create(&tmp_path)?;
