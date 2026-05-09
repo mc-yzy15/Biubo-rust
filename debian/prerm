@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    echo "Removing biubo-waf..."
+    
+    if systemctl is-active biubo-waf >/dev/null 2>&1; then
+        systemctl stop biubo-waf >/dev/null 2>&1 || true
+    fi
+    
+    if systemctl is-enabled biubo-waf >/dev/null 2>&1; then
+        systemctl disable biubo-waf >/dev/null 2>&1 || true
+    fi
+    
+    echo "Removing biubo-waf complete."
+fi

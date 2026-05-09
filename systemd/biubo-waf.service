@@ -1,0 +1,20 @@
+[Unit]
+Description=Biubo Web Application Firewall
+Documentation=https://github.com/mc-yzy15/Biubo-rust
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=biubo
+Group=biubo
+ExecStart=/usr/bin/biubo-waf
+WorkingDirectory=/etc/biubo-waf
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=biubo-waf
+
+[Install]
+WantedBy=multi-user.target

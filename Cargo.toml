@@ -4,6 +4,33 @@ version = "1.0.0-alpha"
 edition = "2021"
 description = "A Web Application Firewall that Thinks, Remembers, and Visualizes"
 license = "MIT"
+authors = ["mc-yzy15 <yingmoliuguang@yeah.net>"]
+homepage = "https://github.com/mc-yzy15/Biubo-rust"
+repository = "https://github.com/mc-yzy15/Biubo-rust"
+readme = "README.md"
+
+[package.metadata.deb]
+maintainer = "mc-yzy15 <yingmoliuguang@yeah.net>"
+copyright = "2024, mc-yzy15 <yingmoliuguang@yeah.net>"
+license-file = ["LICENSE", "0"]
+depends = "systemd"
+extended-description = """\
+Biubo WAF is a Web Application Firewall that provides intelligent protection \
+with AI-powered threat detection, session replay, and real-time visualization."""
+section = "utility"
+priority = "optional"
+assets = [
+    ["target/release/biubo-waf", "/usr/bin/biubo-waf", "755"],
+    ["systemd/biubo-waf.service", "/lib/systemd/system/biubo-waf.service", "644"],
+]
+maintainer-scripts = "debian/"
+systemd-units = { unit-name = "biubo-waf", enable = false, start = false }
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/biubo-waf", dest = "/usr/bin/biubo-waf", mode = "0755" },
+    { source = "systemd/biubo-waf.service", dest = "/usr/lib/systemd/system/biubo-waf.service", mode = "0644" },
+]
 
 [dependencies]
 axum = { version = "0.8", features = ["macros", "ws"] }

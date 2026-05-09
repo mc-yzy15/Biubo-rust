@@ -72,11 +72,95 @@ graph LR
 
 ## 🚀 Quick Start
 
-### Build & Run
+### Installation
+
+#### Windows
+```powershell
+# Using ZIP (portable)
+Expand-Archive -Path biubo-waf-*-x86_64*.zip -DestinationPath C:\BiuboWAF
+cd C:\BiuboWAF
+.\biubo-waf.exe
+
+# Using MSI installer (recommended)
+msiexec /i biubo-waf-*-x86_64*.msi
+```
+
+#### Ubuntu/Debian (APT)
+```bash
+# x86_64
+sudo dpkg -i biubo-waf-*-x86_64*.deb
+sudo apt-get install -f
+
+# ARM64 (Raspberry Pi, AWS Graviton)
+sudo dpkg -i biubo-waf-*-aarch64*.deb
+sudo apt-get install -f
+
+# Start service
+sudo systemctl enable --now biubo-waf
+```
+
+#### CentOS/RHEL/Fedora (YUM/DNF)
+```bash
+# Using YUM
+sudo yum install biubo-waf-*-x86_64*.rpm
+
+# Using DNF (Fedora/RHEL 8+)
+sudo dnf install biubo-waf-*-x86_64*.rpm
+
+# ARM64
+sudo yum install biubo-waf-*-aarch64*.rpm
+
+# Start service
+sudo systemctl enable --now biubo-waf
+```
+
+#### Loongnix/UOS (龙芯架构)
+```bash
+# Install DEB package (Loongnix)
+sudo dpkg -i biubo-waf-*-loongarch64*.deb
+
+# Or install RPM package (UOS)
+sudo yum install biubo-waf-*-loongarch64*.rpm
+
+# Start service
+sudo systemctl enable --now biubo-waf
+```
+
+#### macOS (DMG)
+```bash
+# Intel (x86_64)
+hdiutil attach biubo-waf-*-x86_64*.dmg
+cp /Volumes/Biubo\ WAF/biubo-waf /usr/local/bin/
+hdiutil detach /Volumes/Biubo\ WAF
+
+# Apple Silicon (ARM64)
+hdiutil attach biubo-waf-*-aarch64*.dmg
+cp /Volumes/Biubo\ WAF/biubo-waf /usr/local/bin/
+hdiutil detach /Volumes/Biubo\ WAF
+
+# Run
+biubo-waf
+```
+
+### Supported Architectures
+
+| Platform | Architecture | Package Formats |
+|----------|--------------|-----------------|
+| Windows | x86_64 | ZIP, MSI |
+| Windows | ARM64 | ZIP |
+| Ubuntu/Debian | x86_64 | TAR.GZ, DEB |
+| Ubuntu/Debian | ARM64 | TAR.GZ, DEB |
+| CentOS/RHEL/Fedora | x86_64 | TAR.GZ, RPM (YUM/DNF) |
+| CentOS/RHEL/Fedora | ARM64 | TAR.GZ, RPM (YUM/DNF) |
+| Loongnix/UOS (龙芯) | LoongArch64 | TAR.GZ, DEB, RPM |
+| macOS (Intel) | x86_64 | TAR.GZ, DMG |
+| macOS (Apple Silicon) | ARM64 | TAR.GZ, DMG |
+
+### Build from Source
 ```bash
 # Clone the repository
-git clone https://github.com/BiuboWAF/Biubo.git
-cd Biubo
+git clone https://github.com/mc-yzy15/Biubo-rust.git
+cd Biubo-rust
 
 # Build (requires Rust 1.75+)
 cargo build --release
