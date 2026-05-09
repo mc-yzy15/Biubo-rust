@@ -4,20 +4,20 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Release version (e.g., 1.0.0-alpha.1)'
+        description: "Release version (e.g., 1.0.0-alpha.1)"
         required: true
         type: string
       release_type:
-        description: 'Release type: alpha, nightly, weekly, beta, stable, lts'
+        description: "Release type: dev, nightly, weekly, stable, lts"
         required: true
         type: string
       make_latest:
-        description: 'Mark this release as the latest release (true/false)'
+        description: "Mark this release as the latest release (true/false)"
         required: false
         type: string
-        default: 'false'
+        default: "false"
       retention_days:
-        description: 'Number of days to retain build artifacts'
+        description: "Number of days to retain build artifacts"
         required: false
         type: number
         default: 30
@@ -234,7 +234,7 @@ jobs:
             type=raw,value=latest,enable=${{ inputs.release_type == 'stable' }}
             type=raw,value=nightly,enable=${{ inputs.release_type == 'nightly' }}
             type=raw,value=weekly,enable=${{ inputs.release_type == 'weekly' }}
-            type=raw,value=beta,enable=${{ inputs.release_type == 'beta' }}
+            type=raw,value=dev,enable=${{ inputs.release_type == 'dev' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6

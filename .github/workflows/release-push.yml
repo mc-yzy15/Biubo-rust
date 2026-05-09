@@ -1,9 +1,9 @@
-name: Release - Alpha (Push)
+name: Release - Canary (Push)
 
 on:
   push:
     branches:
-      - master
+      - dev
 
 jobs:
   compute-version:
@@ -21,15 +21,15 @@ jobs:
         shell: bash
         run: |
           BASE_VERSION=$(grep '^version = ' Cargo.toml | head -n 1 | sed 's/version = "\(.*\)"/\1/' | sed 's/-.*//')
-          VERSION="${BASE_VERSION}-alpha.${{ github.run_number }}"
+          VERSION="${BASE_VERSION}-canary.${{ github.run_number }}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
   release:
-    name: Create Alpha Release
+    name: Create Canary Release
     needs: [compute-version]
     uses: ./.github/workflows/_build-release.yml
     with:
       version: ${{ needs.compute-version.outputs.version }}
-      release_type: alpha
+      release_type: canary
       make_latest: false
       retention_days: 30

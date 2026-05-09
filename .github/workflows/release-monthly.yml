@@ -1,4 +1,4 @@
-name: Release - Monthly Beta
+name: Release - Monthly Dev
 
 on:
   schedule:
@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: |
           BASE_VERSION=$(grep '^version = ' Cargo.toml | head -n 1 | sed 's/version = "\(.*\)"/\1/' | sed 's/-.*//')
-          SUFFIX="beta.$(date -u +'%Y%m')"
+          SUFFIX="dev.$(date -u +'%Y%m')"
           VERSION="${BASE_VERSION}-${SUFFIX}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
