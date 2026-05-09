@@ -5,11 +5,10 @@ on:
     inputs:
       version:
         description: "Release version (e.g., 1.0.0-alpha.1)"
-        description: "Release version (e.g., 1.0.0-alpha.1)"
         required: true
         type: string
       release_type:
-        description: 'Release type: alpha, nightly, weekly, beta, stable, lts'
+        description: "Release type: canary, alpha, nightly, weekly, beta, stable, lts"
         required: true
         type: string
       make_latest:
@@ -235,7 +234,6 @@ jobs:
             type=raw,value=latest,enable=${{ inputs.release_type == 'stable' }}
             type=raw,value=canary,enable=${{ inputs.release_type == 'canary' }}
             type=raw,value=nightly,enable=${{ inputs.release_type == 'nightly' }}
-            type=raw,value=weekly,enable=${{ inputs.release_type == 'weekly' }}
             type=raw,value=beta,enable=${{ inputs.release_type == 'beta' }}
 
       - name: Build and push Docker image
