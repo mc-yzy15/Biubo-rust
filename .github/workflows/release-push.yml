@@ -3,7 +3,7 @@ name: Release - Alpha (Push)
 on:
   push:
     branches:
-      - main
+      - master
 
 jobs:
   compute-version:
