@@ -9,7 +9,7 @@ This is the future of Biubo WAF. We are an ambitious, independent project and we
 -   [x] **Dashboard**: Basic monitoring and control.
 
 ## 🏃 Phase 2: Performance & Scalability (Upcoming)
--   [ ] **Asynchronous AI Detection**: Queue-based LLM analysis to avoid request blocking.
+-   [x] **Asynchronous AI Detection**: Queue-based LLM analysis to avoid request blocking.
 -   [ ] **Docker Support**: Containerized deployment with `docker-compose`.
 -   [ ] **Storage Drivers**: Optional Redis/PostgreSQL support for high-traffic logs.
 -   [ ] **SSL Management**: Automated Let's Encrypt certificates directly in the WAF.

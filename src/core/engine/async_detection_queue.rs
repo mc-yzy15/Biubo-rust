@@ -120,8 +120,8 @@ pub fn start_async_detection_workers(
         let receiver_clone: Arc<
             parking_lot::lock_api::Mutex<parking_lot::RawMutex, mpsc::Receiver<DetectionTask>>,
         > = receiver.clone();
-        let settings_clone = settings.clone();
-        let results_clone = queue.results.clone();
+        let settings_clone: Arc<parking_lot::RwLock<Settings>> = settings.clone();
+        let results_clone: Arc<DashMap<String, AsyncDetectionResult>> = queue.results.clone();
 
         tokio::spawn(async move {
             tracing::info!("Async detection worker {} started", i);
@@ -134,7 +134,8 @@ pub fn start_async_detection_workers(
                 match task {
                     Some(task) => {
                         let settings_clone: Settings = settings_clone.read().clone();
-                        let results_clone = results_clone.clone();
+                        let results_clone: Arc<DashMap<String, AsyncDetectionResult>> =
+                            results_clone.clone();
                         let request_id = task.request_id.clone();
 
                         tokio::spawn(async move {
