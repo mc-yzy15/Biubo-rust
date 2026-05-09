@@ -1,7 +1,0 @@
-export { Badge } from './Badge'
-export { Card } from './Card'
-export { Modal } from './Modal'
-export { Pagination } from './Pagination'
-export { ProgressBar } from './ProgressBar'
-export { StatCard } from './StatCard'
-export { TypeBar } from './TypeBar'
