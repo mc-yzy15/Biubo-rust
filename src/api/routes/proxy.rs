@@ -1,5 +1,6 @@
 use crate::api::app::AppState;
-use crate::core::engine::waf_engine::detect_request;
+use crate::core::engine::async_detection_queue::DetectionTask;
+use crate::core::engine::waf_engine::{detect_request, quick_detect_request};
 use crate::core::security::challenge::{
     get_challenge_token, verify_challenge_token, ChallengeStatus,
 };
@@ -264,7 +265,7 @@ async fn reverse_proxy(
 
         let detection = {
             let s = state.settings.read().clone();
-            detect_request(
+            quick_detect_request(
                 &path,
                 method.as_str(),
                 &headers,
@@ -274,8 +275,24 @@ async fn reverse_proxy(
                 &s,
                 &host,
             )
-            .await
         };
+
+        if state.async_detection_queue.is_some() && detection.detection_type == "normal" {
+            let task = DetectionTask {
+                request_id: request_id.clone(),
+                host: host.clone(),
+                url: path.clone(),
+                method: method.as_str().to_string(),
+                headers: headers.clone(),
+                cookies: cookies.clone(),
+                body: decoded_body.clone(),
+                args: args_map.clone(),
+                client_ip: client_ip.clone(),
+            };
+
+            let queue = state.async_detection_queue.as_ref().unwrap();
+            let _ = queue.submit(task).await;
+        }
 
         if detection.detection_type != "normal" {
             let log_entry = build_log_entry(

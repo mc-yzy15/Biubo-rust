@@ -1,5 +1,6 @@
-use crate::api::app::create_app;
+use crate::api::app::create_app_with_async_detection;
 use crate::config::settings::{Settings, SharedSettings};
+use crate::core::engine::async_detection_queue::start_async_detection_workers;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
@@ -41,9 +42,11 @@ async fn main() {
         tracing::info!("WAF cache preloading started for {} hosts (background)", host_count);
     }
 
+    let async_detection_queue = start_async_detection_workers(4, 1000, settings.clone());
+
     tracing::info!("Background GC workers started");
 
-    let app = create_app(settings);
+    let app = create_app_with_async_detection(settings, async_detection_queue);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("Serving on host 0.0.0.0, port {}...", port);

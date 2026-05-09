@@ -1,5 +1,6 @@
 use crate::api::routes;
 use crate::config::settings::{Settings, SharedSettings};
+use crate::core::engine::async_detection_queue::AsyncDetectionQueue;
 use axum::Router;
 use std::collections::HashMap;
 use std::fs;
@@ -13,6 +14,7 @@ pub type ErrorPages = HashMap<String, String>;
 pub struct AppState {
     pub settings: SharedSettings,
     pub error_pages: ErrorPages,
+    pub async_detection_queue: Option<AsyncDetectionQueue>,
 }
 
 pub fn create_app(settings: SharedSettings) -> Router {
@@ -21,6 +23,62 @@ pub fn create_app(settings: SharedSettings) -> Router {
     let state = Arc::new(AppState {
         settings: settings.clone(),
         error_pages,
+        async_detection_queue: None,
+    });
+
+    let cors = CorsLayer::new()
+        .allow_origin(
+            settings
+                .read()
+                .cors_origins
+                .iter()
+                .filter_map(|o| o.parse().ok())
+                .collect::<Vec<_>>(),
+        )
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+            axum::http::Method::PATCH,
+            axum::http::Method::HEAD,
+        ])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::ACCEPT,
+            axum::http::header::ORIGIN,
+            axum::http::HeaderName::from_static("x-requested-with"),
+            axum::http::header::COOKIE,
+        ]);
+
+    let internal_routes = routes::internal::router(state.clone());
+    let dashboard_routes = routes::dashboard::router(state.clone());
+    let init_routes = routes::init::router(state.clone());
+    let proxy_routes = routes::proxy::router(state.clone());
+
+    Router::new()
+        .merge(internal_routes)
+        .merge(dashboard_routes)
+        .merge(init_routes)
+        .merge(proxy_routes)
+        .layer(CompressionLayer::new())
+        .layer(TraceLayer::new_for_http())
+        .layer(cors)
+        .with_state(state)
+}
+
+pub fn create_app_with_async_detection(
+    settings: SharedSettings,
+    async_detection_queue: AsyncDetectionQueue,
+) -> Router {
+    let error_pages = load_error_pages(&settings.read());
+
+    let state = Arc::new(AppState {
+        settings: settings.clone(),
+        error_pages,
+        async_detection_queue: Some(async_detection_queue),
     });
 
     let cors = CorsLayer::new()

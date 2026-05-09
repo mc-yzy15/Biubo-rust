@@ -3,8 +3,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 
 use crate::config::settings::Settings;
 use crate::core::engine::rules::COMPILED_RULES;
@@ -617,10 +617,77 @@ fn extract_json(text: &str) -> Option<Value> {
 }
 
 pub fn start_cache_gc_worker(cache_ttl: u64, gc_interval: u64) {
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(gc_interval));
-            DETECTION_CACHE.retain(|_, v| v.timestamp.elapsed().as_secs() < cache_ttl);
-        }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(gc_interval));
+        DETECTION_CACHE.retain(|_, v| v.timestamp.elapsed().as_secs() < cache_ttl);
     });
+}
+
+pub fn quick_detect_request(
+    url: &str,
+    method: &str,
+    headers: &HashMap<String, String>,
+    cookies: &HashMap<String, String>,
+    body: &[u8],
+    args: &HashMap<String, String>,
+    settings: &Settings,
+    host: &str,
+) -> DetectionResult {
+    if is_static_resource(url, &settings.static_extensions) {
+        return DetectionResult::normal();
+    }
+
+    if url.len() > 2000 {
+        return DetectionResult::hacker(vec!["buffer_overflow".to_string()]);
+    }
+
+    let headers_size: usize = headers.iter().map(|(k, v)| k.len() + v.len()).sum();
+    if headers_size > 4096 {
+        return DetectionResult::hacker(vec!["buffer_overflow".to_string()]);
+    }
+
+    let cookies_size: usize = cookies.iter().map(|(k, v)| k.len() + v.len()).sum();
+    if cookies_size > 4096 {
+        return DetectionResult::hacker(vec!["buffer_overflow".to_string()]);
+    }
+
+    let content_type = headers
+        .get("content-type")
+        .map(|v| v.to_lowercase())
+        .unwrap_or_default();
+
+    if !content_type.contains("multipart/form-data") && body.len() > 131072 {
+        return DetectionResult::hacker(vec!["buffer_overflow".to_string()]);
+    }
+
+    let parsed_body = parse_body(body, &content_type);
+
+    let host_rules = get_host_rules(host);
+
+    let (is_malicious, attack_types) = check_rules(
+        url,
+        &serde_json::to_string(headers).unwrap_or_default(),
+        &serde_json::to_string(cookies).unwrap_or_default(),
+        &parsed_body,
+        Some(&host_rules),
+    );
+
+    if is_malicious {
+        return DetectionResult::hacker(attack_types);
+    }
+
+    let data_combined = format!(
+        "{}|{}",
+        parsed_body,
+        serde_json::to_string(args).unwrap_or_default()
+    );
+    let key = cache_key(url, &data_combined);
+
+    if let Some(entry) = DETECTION_CACHE.get(&key) {
+        if entry.timestamp.elapsed().as_secs() < settings.cache_ttl as u64 {
+            return entry.data.clone();
+        }
+    }
+
+    DetectionResult::normal()
 }
