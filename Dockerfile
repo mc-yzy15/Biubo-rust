@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM rust:1.85-slim AS builder
+FROM --platform=$BUILDPLATFORM rust:1-slim AS builder
 
 WORKDIR /app
 

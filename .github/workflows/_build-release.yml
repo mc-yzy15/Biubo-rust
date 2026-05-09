@@ -104,14 +104,11 @@ jobs:
           mkdir -p dist
 
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cd "target/${{ matrix.target }}/release"
-            7z a "../../../../../dist/${ARTIFACT_NAME}.zip" "$BINARY_NAME"
+            7z a "dist/${ARTIFACT_NAME}.zip" "target/${{ matrix.target }}/release/$BINARY_NAME"
           elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            cd "target/${{ matrix.target }}/release"
-            tar czf "../../../../../dist/${ARTIFACT_NAME}.tar.gz" "$BINARY_NAME"
+            tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "$BINARY_NAME"
           elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            cd "target/${{ matrix.target }}/release"
-            tar czf "../../../../../dist/${ARTIFACT_NAME}.tar.gz" "$BINARY_NAME"
+            tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "$BINARY_NAME"
           fi
 
       - name: Upload build artifact
