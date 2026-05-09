@@ -5,6 +5,10 @@ on:
     branches:
       - dev
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   compute-version:
     name: Compute Version
@@ -28,9 +32,6 @@ jobs:
     name: Create Canary Release
     needs: [compute-version]
     uses: ./.github/workflows/_build-release.yml
-    permissions:
-      contents: write
-      packages: write
     with:
       version: ${{ needs.compute-version.outputs.version }}
       release_type: canary

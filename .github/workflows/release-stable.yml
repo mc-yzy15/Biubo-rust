@@ -14,6 +14,10 @@ on:
         required: false
         default: true
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   test:
     name: Run Tests

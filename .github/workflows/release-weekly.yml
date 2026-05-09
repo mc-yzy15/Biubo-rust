@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
   actions: write
 
 jobs:
@@ -66,6 +67,6 @@ jobs:
     uses: ./.github/workflows/_build-release.yml
     with:
       version: ${{ needs.compute-version.outputs.version }}
-      release_type: beta
+      release_type: weekly
       make_latest: false
       retention_days: 90
