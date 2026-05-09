@@ -49,6 +49,48 @@ Stay ahead of the threat. Visualize every incoming attack on a live global map, 
 | **JS Challenge** | Client-side Challenge-Response to stop headless bots. | ✅ |
 | **Self-Contained DB** | Lightning-fast Msgpack storage with write-behind flushing. | ✅ |
 | **Dynamic Dashboard** | Modern, responsive console for real-time traffic monitoring. | ✅ |
+| **Global Attack Map** | Real-time 3D globe visualization of attack sources. | ✅ |
+| **Multi-Arch Support** | Windows, Linux (x86_64/ARM64/LoongArch), macOS (Intel/Apple Silicon). | ✅ |
+| **i18n Support** | Built-in English and Chinese localization. | ✅ |
+
+---
+
+## 🛠️ Tech Stack
+
+### Backend (Rust)
+- **Web Framework**: [Axum](https://github.com/tokio-rs/axum) 0.8 + Tokio async runtime
+- **HTTP Client**: [reqwest](https://github.com/seanmonstar/reqwest) with rustls-tls
+- **Storage**: Custom Msgpack-based key-value store with write-behind flushing
+- **Concurrency**: DashMap, parking_lot for high-performance concurrent access
+- **Logging**: tracing + tracing-subscriber with JSON output
+
+### Frontend (TypeScript)
+- **Framework**: React 18 + TypeScript
+- **Build Tool**: Vite 6
+- **i18n**: i18next + react-i18next
+- **Styling**: Custom CSS with responsive design
+
+---
+
+## ⚙️ Configuration
+
+Biubo WAF uses a file-based configuration system. Configuration files are stored in the `data/` directory:
+
+| File | Description |
+| :--- | :--- |
+| `data/RAM.msgpack` | Real-time config, blacklists, whitelists |
+| `data/logs/` | Daily traffic logs and rrweb sessions |
+
+### Default Settings
+- **WAF Port**: `8080` (configurable via `WAF_PORT` env var)
+- **Dashboard**: Access at `http://localhost:8080/dashboard`
+- **Log Level**: `info` (configurable via `RUST_LOG` env var)
+
+### Environment Variables
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `WAF_PORT` | Port for the WAF proxy | `8080` |
+| `RUST_LOG` | Logging level | `info` |
 
 ---
 
@@ -66,6 +108,37 @@ graph LR
     end
     F --> G[Your Backend]
     E --> H[Visual Log + rrweb]
+```
+
+---
+
+## 📁 Project Structure
+
+```
+Biubo-rust/
+├── src/
+│   ├── api/              # HTTP API routes (Axum)
+│   │   ├── routes/       # Dashboard, proxy, init handlers
+│   │   └── app.rs        # App builder
+│   ├── config/           # Configuration management
+│   ├── core/             # Core WAF logic
+│   │   ├── engine/       # Detection engine (Regex + LLM)
+│   │   ├── security/     # JS challenge, rate limiting
+│   │   └── session/      # Session management & GC
+│   ├── data/             # Data layer
+│   │   ├── analytics/    # Traffic aggregation & stats
+│   │   └── storage/      # Msgpack-based storage engine
+│   ├── services/         # External services
+│   │   ├── llm/          # LLM client & integration
+│   │   └── proxy/        # Backend forwarding logic
+│   └── utils/            # Utilities (compression, parsers)
+├── frontend/             # React + TypeScript dashboard
+├── page/                 # Built frontend assets (served by WAF)
+├── templates/            # HTML templates & JS beacons
+├── systemd/              # systemd service file
+├── debian/               # Debian package scripts
+├── rpm/                  # RPM package spec
+└── wix/                  # Windows MSI installer (WiX)
 ```
 
 ---
@@ -171,7 +244,15 @@ cargo run --release
 
 ### Docker Deployment
 ```bash
-docker run zplb/biubo:1.1.0
+# Run with default settings
+docker run -p 8080:8080 zplb/biubo:1.1.0
+
+# Run with custom port and config volume
+docker run -d \
+  -p 8080:8080 \
+  -v $(pwd)/data:/app/data \
+  -e RUST_LOG=debug \
+  zplb/biubo:1.1.0
 ```
 
 ---

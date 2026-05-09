@@ -66,7 +66,7 @@ We avoid heavy dependencies like MySQL or Redis in the first release.
 If you want to contribute, here are some great places to start:
 1.  **Performance Optimization**: Implement an asynchronous LLM queue so we don't block requests.
 2.  **Dockerization**: Help us build a modular Dockerfile.
-3.  **UI/UX**: Enhance the Dashboard visuals (built with plain JS/HTML).
+3.  **UI/UX**: Enhance the Dashboard visuals (built with React + TypeScript + Vite).
 4.  **Rule Sets**: Expand the regex rules in `src/core/engine/rules.rs` based on recent CVEs.
 
 ---
