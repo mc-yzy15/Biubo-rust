@@ -92,7 +92,7 @@ pub async fn detection_worker(
                         timestamp: chrono::Utc::now(),
                     };
 
-                    results_clone.insert(request_id.clone(), result);
+                    results_clone.insert(request_id, result);
 
                     tracing::debug!("Async detection completed for request: {}", request_id);
                 });
@@ -112,30 +112,25 @@ pub fn start_async_detection_workers(
 ) -> AsyncDetectionQueue {
     let (queue, receiver) = AsyncDetectionQueue::new(queue_size);
 
-    let receiver: Arc<
-        parking_lot::lock_api::Mutex<parking_lot::RawMutex, mpsc::Receiver<DetectionTask>>,
-    > = Arc::new(parking_lot::Mutex::new(receiver));
+    let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
 
     for i in 0..worker_count {
-        let receiver_clone: Arc<
-            parking_lot::lock_api::Mutex<parking_lot::RawMutex, mpsc::Receiver<DetectionTask>>,
-        > = receiver.clone();
-        let settings_clone: Arc<parking_lot::RwLock<Settings>> = settings.clone();
-        let results_clone: Arc<DashMap<String, AsyncDetectionResult>> = queue.results.clone();
+        let receiver_clone = receiver.clone();
+        let settings_clone = settings.clone();
+        let results_clone = queue.results.clone();
 
         tokio::spawn(async move {
             tracing::info!("Async detection worker {} started", i);
             loop {
-                let task: Option<DetectionTask> = {
+                let task = {
                     let mut rx = receiver_clone.lock().await;
                     rx.recv().await
                 };
 
                 match task {
                     Some(task) => {
-                        let settings_clone: Settings = settings_clone.read().clone();
-                        let results_clone: Arc<DashMap<String, AsyncDetectionResult>> =
-                            results_clone.clone();
+                        let settings_clone = settings_clone.read().clone();
+                        let results_clone = results_clone.clone();
                         let request_id = task.request_id.clone();
 
                         tokio::spawn(async move {
@@ -157,7 +152,7 @@ pub fn start_async_detection_workers(
                                 timestamp: chrono::Utc::now(),
                             };
 
-                            results_clone.insert(request_id.clone(), result);
+                            results_clone.insert(request_id, result);
 
                             tracing::debug!(
                                 "Async detection completed for request: {}",
