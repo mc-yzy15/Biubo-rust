@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       release_type:
-        description: "Release type: canary, alpha, nightly, weekly, beta, stable, lts"
+        description: "Release type: canary, alpha, nightly, beta, stable, lts"
         required: true
         type: string
       make_latest:
@@ -230,11 +230,9 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=${{ inputs.version }}
-            type=raw,value=${{ inputs.release_type }},enable=${{ inputs.release_type == 'stable' }}
             type=raw,value=latest,enable=${{ inputs.release_type == 'stable' }}
-            type=raw,value=canary,enable=${{ inputs.release_type == 'canary' }}
-            type=raw,value=nightly,enable=${{ inputs.release_type == 'nightly' }}
-            type=raw,value=beta,enable=${{ inputs.release_type == 'beta' }}
+            type=raw,value=lts,enable=${{ inputs.release_type == 'lts' }}
+            type=raw,value=lts-latest,enable=${{ inputs.release_type == 'lts' && inputs.make_latest == 'true' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
