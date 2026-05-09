@@ -105,7 +105,7 @@ jobs:
 
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cd "target/${{ matrix.target }}/release"
-            zip "../../../../../dist/${ARTIFACT_NAME}.zip" "$BINARY_NAME"
+            7z a "../../../../../dist/${ARTIFACT_NAME}.zip" "$BINARY_NAME"
           elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             cd "target/${{ matrix.target }}/release"
             tar czf "../../../../../dist/${ARTIFACT_NAME}.tar.gz" "$BINARY_NAME"
