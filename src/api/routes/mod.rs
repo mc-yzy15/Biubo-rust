@@ -1,4 +1,8 @@
+pub mod cluster;
 pub mod dashboard;
 pub mod init;
 pub mod internal;
+pub mod plugins;
 pub mod proxy;
+pub mod waf_api;
+pub mod waf_events;

@@ -7,12 +7,22 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
+use crate::core::models::{ClusterRole, WafApiKey};
+use crate::data::storage::driver::StorageDriverType;
+
 pub type SharedSettings = Arc<RwLock<Settings>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpHeaderConfig {
     pub state: bool,
     pub order: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleEngineConfig {
+    pub paranoia_level: u8,
+    pub rule_paths: Vec<PathBuf>,
+    pub crs_auto_update: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +69,39 @@ pub struct Settings {
     pub log_auto_delete: bool,
     pub log_retention_days: i64,
     pub log_retain: String,
+
+    pub storage_driver: StorageDriverType,
+    pub redis_url: String,
+    pub postgres_url: String,
+
+    pub ssl_enabled: bool,
+    pub ssl_domains: Vec<String>,
+    pub ssl_acme_email: String,
+    pub ssl_cert_dir: PathBuf,
+    pub ssl_port: u16,
+
+    pub rule_engine: RuleEngineConfig,
+
+    pub ip_reputation_providers: Vec<crate::core::models::ReputationProviderConfig>,
+
+    pub behavior_profiling_enabled: bool,
+    pub behavior_window_seconds: u64,
+
+    pub llm_quick_model: String,
+    pub llm_quick_base_url: String,
+    pub llm_quick_api_key: String,
+    pub llm_deep_model: String,
+    pub llm_deep_base_url: String,
+    pub llm_deep_api_key: String,
+
+    pub cluster_mode: bool,
+    pub cluster_role: ClusterRole,
+    pub cluster_redis_url: Option<String>,
+
+    pub waf_api_enabled: bool,
+    pub waf_api_keys: Vec<WafApiKey>,
+
+    pub auto_patch_enabled: bool,
 }
 
 fn generate_challenge_secret() -> String {
@@ -137,6 +180,43 @@ impl Default for Settings {
             log_auto_delete: false,
             log_retention_days: 30,
             log_retain: "type:hacker".to_string(),
+
+            storage_driver: StorageDriverType::MsgPack,
+            redis_url: String::new(),
+            postgres_url: String::new(),
+
+            ssl_enabled: false,
+            ssl_domains: Vec::new(),
+            ssl_acme_email: String::new(),
+            ssl_cert_dir: project_root.join("ssl"),
+            ssl_port: 443,
+
+            rule_engine: RuleEngineConfig {
+                paranoia_level: 1,
+                rule_paths: Vec::new(),
+                crs_auto_update: false,
+            },
+
+            ip_reputation_providers: Vec::new(),
+
+            behavior_profiling_enabled: false,
+            behavior_window_seconds: 3600,
+
+            llm_quick_model: "qwen-turbo".to_string(),
+            llm_quick_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+            llm_quick_api_key: String::new(),
+            llm_deep_model: "qwen-plus".to_string(),
+            llm_deep_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+            llm_deep_api_key: String::new(),
+
+            cluster_mode: false,
+            cluster_role: ClusterRole::Worker,
+            cluster_redis_url: None,
+
+            waf_api_enabled: false,
+            waf_api_keys: Vec::new(),
+
+            auto_patch_enabled: false,
         }
     }
 }
@@ -162,6 +242,30 @@ struct PersistedConfig {
     api_key: Option<String>,
     llm_model: Option<String>,
     llm_base_url: Option<String>,
+    storage_driver: Option<StorageDriverType>,
+    redis_url: Option<String>,
+    postgres_url: Option<String>,
+    ssl_enabled: Option<bool>,
+    ssl_domains: Option<Vec<String>>,
+    ssl_acme_email: Option<String>,
+    ssl_cert_dir: Option<PathBuf>,
+    ssl_port: Option<u16>,
+    rule_engine: Option<RuleEngineConfig>,
+    ip_reputation_providers: Option<Vec<crate::core::models::ReputationProviderConfig>>,
+    behavior_profiling_enabled: Option<bool>,
+    behavior_window_seconds: Option<u64>,
+    llm_quick_model: Option<String>,
+    llm_quick_base_url: Option<String>,
+    llm_quick_api_key: Option<String>,
+    llm_deep_model: Option<String>,
+    llm_deep_base_url: Option<String>,
+    llm_deep_api_key: Option<String>,
+    cluster_mode: Option<bool>,
+    cluster_role: Option<ClusterRole>,
+    cluster_redis_url: Option<String>,
+    waf_api_enabled: Option<bool>,
+    waf_api_keys: Option<Vec<WafApiKey>>,
+    auto_patch_enabled: Option<bool>,
 }
 
 impl Settings {
@@ -188,7 +292,19 @@ impl Settings {
             "DASHBOARD_PATH": self.dashboard_path,
             "API_KEY": self.api_key,
             "LLM_MODEL": self.llm_model,
-            "LLM_BASE_URL": self.llm_base_url
+            "LLM_BASE_URL": self.llm_base_url,
+            "STORAGE_DRIVER": match self.storage_driver {
+                StorageDriverType::MsgPack => "msgpack",
+                StorageDriverType::Redis => "redis",
+                StorageDriverType::PostgreSQL => "postgresql",
+            },
+            "STORAGE_REDIS_URL": self.redis_url,
+            "STORAGE_POSTGRES_URL": self.postgres_url,
+            "SSL_ENABLED": self.ssl_enabled,
+            "SSL_DOMAINS": self.ssl_domains,
+            "SSL_ACME_EMAIL": self.ssl_acme_email,
+            "SSL_CERT_DIR": self.ssl_cert_dir.to_string_lossy(),
+            "SSL_PORT": self.ssl_port
         });
 
         match fs::write(
@@ -232,6 +348,30 @@ impl Settings {
                     }
                     if let Some(v) = cfg.llm_base_url {
                         self.llm_base_url = v;
+                    }
+                    if let Some(v) = cfg.storage_driver {
+                        self.storage_driver = v;
+                    }
+                    if let Some(v) = cfg.redis_url {
+                        self.redis_url = v;
+                    }
+                    if let Some(v) = cfg.postgres_url {
+                        self.postgres_url = v;
+                    }
+                    if let Some(v) = cfg.ssl_enabled {
+                        self.ssl_enabled = v;
+                    }
+                    if let Some(v) = cfg.ssl_domains {
+                        self.ssl_domains = v;
+                    }
+                    if let Some(v) = cfg.ssl_acme_email {
+                        self.ssl_acme_email = v;
+                    }
+                    if let Some(v) = cfg.ssl_cert_dir {
+                        self.ssl_cert_dir = v;
+                    }
+                    if let Some(v) = cfg.ssl_port {
+                        self.ssl_port = v;
                     }
                 }
                 Err(e) => tracing::error!("Failed to parse config.json: {}", e),
@@ -337,6 +477,37 @@ impl Settings {
         }
         if let Ok(v) = env::var("WAF_LOG_RETAIN_LIST") {
             self.log_retain = v;
+        }
+        if let Ok(v) = env::var("STORAGE_DRIVER") {
+            match v.to_lowercase().as_str() {
+                "msgpack" => self.storage_driver = StorageDriverType::MsgPack,
+                "redis" => self.storage_driver = StorageDriverType::Redis,
+                "postgresql" => self.storage_driver = StorageDriverType::PostgreSQL,
+                _ => tracing::warn!("Invalid STORAGE_DRIVER value: {}, using default", v),
+            }
+        }
+        if let Ok(v) = env::var("STORAGE_REDIS_URL") {
+            self.redis_url = v;
+        }
+        if let Ok(v) = env::var("STORAGE_POSTGRES_URL") {
+            self.postgres_url = v;
+        }
+        if let Ok(v) = env::var("SSL_ENABLED") {
+            self.ssl_enabled = v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("SSL_DOMAINS") {
+            self.ssl_domains = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        }
+        if let Ok(v) = env::var("SSL_ACME_EMAIL") {
+            self.ssl_acme_email = v;
+        }
+        if let Ok(v) = env::var("SSL_CERT_DIR") {
+            self.ssl_cert_dir = PathBuf::from(v);
+        }
+        if let Ok(v) = env::var("SSL_PORT") {
+            if let Ok(port) = v.parse() {
+                self.ssl_port = port;
+            }
         }
     }
 }

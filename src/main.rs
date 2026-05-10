@@ -1,15 +1,22 @@
 use crate::api::app::create_app_with_async_detection;
 use crate::config::settings::{Settings, SharedSettings};
 use crate::core::engine::async_detection_queue::start_async_detection_workers;
+use crate::services::ssl::SslManager;
+use axum::Router;
+use axum::routing::get;
+use axum::response::Redirect;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 mod api;
+mod cluster;
 mod config;
 mod core;
 mod data;
+mod plugins;
 mod services;
 mod utils;
+
 
 #[tokio::main]
 async fn main() {
@@ -21,8 +28,16 @@ async fn main() {
 
     tracing::info!("Starting Biubo WAF Protective Proxy (Rust Edition)...");
 
+    plugins::init_plugins();
+
     let settings: SharedSettings = Arc::new(parking_lot::RwLock::new(Settings::load()));
     let port = settings.read().waf_port;
+
+    let ssl_enabled = settings.read().ssl_enabled;
+    let ssl_port = settings.read().ssl_port;
+    let ssl_domains = settings.read().ssl_domains.clone();
+    let ssl_acme_email = settings.read().ssl_acme_email.clone();
+    let ssl_cert_dir = settings.read().ssl_cert_dir.clone();
 
     let session_timeout = settings.read().session_timeout as u64;
     let session_gc_interval = settings.read().session_gc_interval as u64;
@@ -46,20 +61,100 @@ async fn main() {
 
     tracing::info!("Background GC workers started");
 
-    let app = create_app_with_async_detection(settings, async_detection_queue);
+    let app = create_app_with_async_detection(settings.clone(), async_detection_queue);
 
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-    tracing::info!("Serving on host 0.0.0.0, port {}...", port);
+    if ssl_enabled && !ssl_domains.is_empty() && !ssl_acme_email.is_empty() {
+        tracing::info!("HTTPS mode enabled on port {}", ssl_port);
 
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("Failed to bind to {}: {}", addr, e);
+        let redirect_app = Router::new()
+            .route("/{*path}", get(https_redirect_handler))
+            .with_state(());
+
+        let redirect_addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        let redirect_listener = match tokio::net::TcpListener::bind(redirect_addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::error!("Failed to bind HTTP redirect listener to {}: {}", redirect_addr, e);
+                std::process::exit(1);
+            }
+        };
+
+        tracing::info!("HTTP redirect server serving on 0.0.0.0:{} -> HTTPS", port);
+
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(redirect_listener, redirect_app).await {
+                tracing::error!("HTTP redirect server error: {}", e);
+            }
+        });
+
+        let mut ssl_manager = SslManager::new(ssl_domains, ssl_acme_email, ssl_cert_dir);
+
+        if let Err(e) = ssl_manager.initialize().await {
+            tracing::error!("Failed to initialize SSL manager: {}", e);
             std::process::exit(1);
         }
-    };
 
-    if let Err(e) = axum::serve(listener, app).await {
-        tracing::error!("Server error: {}", e);
+        ssl_manager.start_renewal_worker().await;
+
+        let tls_addr = std::net::SocketAddr::from(([0, 0, 0, 0], ssl_port));
+        let tls_listener = match tokio::net::TcpListener::bind(tls_addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::error!("Failed to bind TLS listener to {}: {}", tls_addr, e);
+                std::process::exit(1);
+            }
+        };
+
+        tracing::info!("HTTPS server serving on 0.0.0.0:{}...", ssl_port);
+
+        let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(
+            ssl_manager.get_server_config().expect("TLS config not available")
+        ));
+
+        loop {
+            let (tcp_stream, _) = match tls_listener.accept().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    tracing::error!("Failed to accept TLS connection: {}", e);
+                    continue;
+                }
+            };
+
+            let tls_acceptor = tls_acceptor.clone();
+            let app = app.clone();
+
+            tokio::spawn(async move {
+                match tls_acceptor.accept(tcp_stream).await {
+                    Ok(tls_stream) => {
+                        let _ = axum::serve(
+                            tokio_rustls::server::TlsStream::new(tls_stream),
+                            app,
+                        ).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("TLS handshake failed: {}", e);
+                    }
+                }
+            });
+        }
+    } else {
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        tracing::info!("Serving on host 0.0.0.0, port {}...", port);
+
+        let listener = match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::error!("Failed to bind to {}: {}", addr, e);
+                std::process::exit(1);
+            }
+        };
+
+        if let Err(e) = axum::serve(listener, app).await {
+            tracing::error!("Server error: {}", e);
+        }
     }
+}
+
+async fn https_redirect_handler() -> impl axum::response::IntoResponse {
+    Redirect::permanent("https://localhost")
 }

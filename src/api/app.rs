@@ -1,7 +1,12 @@
 use crate::api::routes;
+use crate::api::routes::waf_events::EventBroadcaster;
+use crate::cluster::sync::ConfigSync;
+use crate::cluster::threat_share::ThreatIntelligenceShare;
 use crate::config::settings::{Settings, SharedSettings};
 use crate::core::engine::async_detection_queue::AsyncDetectionQueue;
+use crate::api::middleware::api_key_auth::api_key_auth_middleware;
 use axum::Router;
+use axum::middleware::from_fn_with_state;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -15,16 +20,25 @@ pub struct AppState {
     pub settings: SharedSettings,
     pub error_pages: ErrorPages,
     pub async_detection_queue: Option<AsyncDetectionQueue>,
+    pub event_broadcaster: EventBroadcaster,
 }
 
 pub fn create_app(settings: SharedSettings) -> Router {
     let error_pages = load_error_pages(&settings.read());
+    let event_broadcaster = EventBroadcaster::new();
 
     let state = Arc::new(AppState {
         settings: settings.clone(),
         error_pages,
         async_detection_queue: None,
+        event_broadcaster,
     });
+
+    let cluster_manager = Arc::new(crate::cluster::ClusterManager::new(settings.clone()));
+    let config_sync = Arc::new(ConfigSync::new(cluster_manager.clone(), settings.clone()));
+    let threat_share = Arc::new(ThreatIntelligenceShare::new(cluster_manager.clone(), settings.clone()));
+
+    let cluster_routes = routes::cluster::router(state.clone(), config_sync, threat_share);
 
     let cors = CorsLayer::new()
         .allow_origin(
@@ -57,12 +71,30 @@ pub fn create_app(settings: SharedSettings) -> Router {
     let dashboard_routes = routes::dashboard::router(state.clone());
     let init_routes = routes::init::router(state.clone());
     let proxy_routes = routes::proxy::router(state.clone());
+    let plugin_routes = routes::plugins::router(state.clone());
+    let waf_api_routes = routes::waf_api::router(state.clone());
+    let waf_events_route = routes::waf_events::websocket_events_handler(state.clone());
+
+    let waf_api_with_auth = Router::new()
+        .merge(waf_api_routes)
+        .layer(from_fn_with_state(state.clone(), api_key_auth_middleware));
+
+    let cm_clone = cluster_manager.clone();
+    tokio::spawn(async move {
+        cm_clone.start_heartbeat_worker().await;
+        cm_clone.start_dead_node_detector().await;
+        cm_clone.start_discovery_worker().await;
+    });
 
     Router::new()
         .merge(internal_routes)
         .merge(dashboard_routes)
         .merge(init_routes)
         .merge(proxy_routes)
+        .merge(plugin_routes)
+        .merge(cluster_routes)
+        .nest("/api/waf/v1", waf_api_with_auth)
+        .route("/api/waf/v1/events", waf_events_route)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
@@ -74,12 +106,20 @@ pub fn create_app_with_async_detection(
     async_detection_queue: AsyncDetectionQueue,
 ) -> Router {
     let error_pages = load_error_pages(&settings.read());
+    let event_broadcaster = EventBroadcaster::new();
 
     let state = Arc::new(AppState {
         settings: settings.clone(),
         error_pages,
         async_detection_queue: Some(async_detection_queue),
+        event_broadcaster,
     });
+
+    let cluster_manager = Arc::new(crate::cluster::ClusterManager::new(settings.clone()));
+    let config_sync = Arc::new(ConfigSync::new(cluster_manager.clone(), settings.clone()));
+    let threat_share = Arc::new(ThreatIntelligenceShare::new(cluster_manager.clone(), settings.clone()));
+
+    let cluster_routes = routes::cluster::router(state.clone(), config_sync, threat_share);
 
     let cors = CorsLayer::new()
         .allow_origin(
@@ -112,12 +152,29 @@ pub fn create_app_with_async_detection(
     let dashboard_routes = routes::dashboard::router(state.clone());
     let init_routes = routes::init::router(state.clone());
     let proxy_routes = routes::proxy::router(state.clone());
+    let plugin_routes = routes::plugins::router(state.clone());
+    let waf_api_routes = routes::waf_api::router(state.clone());
+    let waf_events_route = routes::waf_events::websocket_events_handler(state.clone());
+
+    let waf_api_with_auth = Router::new()
+        .merge(waf_api_routes)
+        .layer(from_fn_with_state(state.clone(), api_key_auth_middleware));
+
+    tokio::spawn(async move {
+        cluster_manager.start_heartbeat_worker().await;
+        cluster_manager.start_dead_node_detector().await;
+        cluster_manager.start_discovery_worker().await;
+    });
 
     Router::new()
         .merge(internal_routes)
         .merge(dashboard_routes)
         .merge(init_routes)
         .merge(proxy_routes)
+        .merge(plugin_routes)
+        .merge(cluster_routes)
+        .nest("/api/waf/v1", waf_api_with_auth)
+        .route("/api/waf/v1/events", waf_events_route)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)

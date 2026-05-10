@@ -143,30 +143,46 @@ impl ProxyDB {
     }
 
     pub fn write_log(&self, entry: serde_json::Value) {
-        let _guard = self.lock.lock();
-        let _ = self.ensure_log_db();
-        let log_db = self.log_db.lock();
-        if let Some(ref db) = *log_db {
-            let mut logs = db
-                .get("logs")
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default();
+        let should_export = {
+            let _guard = self.lock.lock();
+            let _ = self.ensure_log_db();
+            let log_db = self.log_db.lock();
+            if let Some(ref db) = *log_db {
+                let mut logs = db
+                    .get("logs")
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default();
 
-            let rid = entry.get("request_id").and_then(|v| v.as_str());
+                let rid = entry.get("request_id").and_then(|v| v.as_str());
 
-            if let Some(rid) = rid {
-                if let Some(pos) = logs
-                    .iter()
-                    .position(|e| e.get("request_id").and_then(|v| v.as_str()) == Some(rid))
-                {
-                    logs[pos] = entry;
+                if let Some(rid) = rid {
+                    if let Some(pos) = logs
+                        .iter()
+                        .position(|e| e.get("request_id").and_then(|v| v.as_str()) == Some(rid))
+                    {
+                        logs[pos] = entry;
+                        db.set("logs", serde_json::json!(logs));
+                        true
+                    } else {
+                        logs.push(entry);
+                        db.set("logs", serde_json::json!(logs));
+                        true
+                    }
+                } else {
+                    logs.push(entry);
                     db.set("logs", serde_json::json!(logs));
-                    return;
+                    true
                 }
+            } else {
+                false
             }
+        };
 
-            logs.push(entry);
-            db.set("logs", serde_json::json!(logs));
+        if should_export {
+            let entry_clone = entry;
+            tokio::spawn(async move {
+                crate::plugins::trigger_exporters(entry_clone).await;
+            });
         }
     }
 

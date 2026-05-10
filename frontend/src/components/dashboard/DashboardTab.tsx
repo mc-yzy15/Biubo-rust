@@ -113,54 +113,58 @@ export function DashboardTab() {
       {/* Row 4: top IPs + top URLs */}
       <div className="grid-2" style={{ marginBottom: 20 }}>
         <Card title={t('dashboard.topAttackIPs')}>
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>IP</th>
-                <th>{t('dashboard.count')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.topIPs.length > 0 ? (
-                data.topIPs.map(([ip, cnt], idx) => (
-                  <tr key={idx}>
-                    <td style={{ fontFamily: "'Share Tech Mono', monospace" }}>{ip}</td>
-                    <td>{cnt}</td>
-                  </tr>
-                ))
-              ) : (
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead>
                 <tr>
-                  <td colSpan={2} style={{ color: 'var(--dim)' }}>{t('dashboard.noData')}</td>
+                  <th>IP</th>
+                  <th>{t('dashboard.count')}</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {data.topIPs.length > 0 ? (
+                  data.topIPs.map(([ip, cnt], idx) => (
+                    <tr key={idx}>
+                      <td style={{ fontFamily: "'Share Tech Mono', monospace" }}>{ip}</td>
+                      <td>{cnt}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={2} style={{ color: 'var(--dim)' }}>{t('dashboard.noData')}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </Card>
         <Card title={t('dashboard.topTargetURLs')}>
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>URL</th>
-                <th>{t('dashboard.count')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.topURLs.length > 0 ? (
-                data.topURLs.map(([url, cnt], idx) => (
-                  <tr key={idx}>
-                    <td style={{ fontFamily: "'Share Tech Mono', monospace", maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={url}>
-                      {url}
-                    </td>
-                    <td>{cnt}</td>
-                  </tr>
-                ))
-              ) : (
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead>
                 <tr>
-                  <td colSpan={2} style={{ color: 'var(--dim)' }}>{t('dashboard.noData')}</td>
+                  <th>URL</th>
+                  <th>{t('dashboard.count')}</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {data.topURLs.length > 0 ? (
+                  data.topURLs.map(([url, cnt], idx) => (
+                    <tr key={idx}>
+                      <td style={{ fontFamily: "'Share Tech Mono', monospace", maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={url}>
+                        {url}
+                      </td>
+                      <td>{cnt}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={2} style={{ color: 'var(--dim)' }}>{t('dashboard.noData')}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </Card>
       </div>
 

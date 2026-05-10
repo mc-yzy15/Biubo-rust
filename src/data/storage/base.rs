@@ -155,6 +155,11 @@ impl Database {
             .contains_key(key)
     }
 
+    pub fn keys(&self) -> Vec<String> {
+        let guard = self.data.lock().expect("Failed to lock database");
+        guard.keys().cloned().collect()
+    }
+
     pub fn flush(&self) -> std::io::Result<()> {
         if !self.dirty.load(Ordering::Acquire) {
             return Ok(());

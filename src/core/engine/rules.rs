@@ -1,6 +1,7 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 pub static RAW_RULES: &[(&str, &[&str])] = &[
     (
@@ -234,6 +235,9 @@ pub static COMPILED_RULES: Lazy<HashMap<&'static str, Regex>> = Lazy::new(|| {
     compiled
 });
 
+static PLUGIN_RULE_CACHE: Lazy<Mutex<HashMap<String, (String, Regex)>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 #[allow(dead_code)]
 pub fn check_rules(text: &str, compiled_rules: &HashMap<&str, Regex>) -> (bool, Vec<String>) {
     let mut matched = Vec::new();
@@ -243,6 +247,70 @@ pub fn check_rules(text: &str, compiled_rules: &HashMap<&str, Regex>) -> (bool, 
         }
     }
     (!matched.is_empty(), matched)
+}
+
+pub fn evaluate_plugin_rules(
+    text: &str,
+    plugin_rules: &HashMap<&str, Vec<&str>>,
+) -> Vec<String> {
+    let mut matched = Vec::new();
+
+    for (attack_type, patterns) in plugin_rules.iter() {
+        if patterns.is_empty() {
+            continue;
+        }
+
+        let cache_key = patterns.join("|");
+        let cache_key_clone = cache_key.clone();
+
+        let mut cache = PLUGIN_RULE_CACHE.lock().unwrap();
+        let regex = cache
+            .entry(cache_key)
+            .or_insert_with(|| {
+                let combined = cache_key_clone.clone();
+                match Regex::new(&format!("(?i){}", combined)) {
+                    Ok(re) => (cache_key_clone.clone(), re),
+                    Err(e) => {
+                        tracing::error!(
+                            "Plugin rule compilation failed for {}: {}",
+                            attack_type,
+                            e
+                        );
+                        (cache_key_clone.clone(), Regex::new("$^").unwrap())
+                    }
+                }
+            })
+            .1
+            .clone();
+        drop(cache);
+
+        if regex.is_match(text) {
+            matched.push(attack_type.to_string());
+        }
+    }
+
+    matched
+}
+
+pub fn check_rules_with_plugins(text: &str) -> (bool, Vec<String>) {
+    let (_builtin_matched, builtin_types) = check_rules(text, &COMPILED_RULES);
+
+    let plugin_rules_map = crate::plugins::get_plugin_detection_rules();
+    let plugin_rules: HashMap<&str, Vec<&str>> = plugin_rules_map
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.iter().map(|s| s.as_str()).collect()))
+        .collect();
+
+    let plugin_matched = evaluate_plugin_rules(text, &plugin_rules);
+
+    let mut all_matched = builtin_types.clone();
+    for matched_type in plugin_matched {
+        if !all_matched.contains(&matched_type) {
+            all_matched.push(matched_type);
+        }
+    }
+
+    (!all_matched.is_empty(), all_matched)
 }
 
 #[cfg(test)]
@@ -367,5 +435,79 @@ mod tests {
         assert!(is_malicious);
         assert!(types.contains(&"xss".to_string()));
         assert!(types.contains(&"sql_injection".to_string()));
+    }
+
+    #[test]
+    fn test_evaluate_plugin_rules_empty() {
+        let empty_rules = HashMap::new();
+        let matched = evaluate_plugin_rules("normal request", &empty_rules);
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn test_evaluate_plugin_rules_single_pattern() {
+        let mut rules = HashMap::new();
+        rules.insert("custom_xss", vec!["<script>alert"]);
+        let matched = evaluate_plugin_rules("<script>alert('hi')</script>", &rules);
+        assert!(!matched.is_empty());
+        assert!(matched.contains(&"custom_xss".to_string()));
+    }
+
+    #[test]
+    fn test_evaluate_plugin_rules_multiple_patterns() {
+        let mut rules = HashMap::new();
+        rules.insert("custom_sqli", vec!["UNION SELECT", "DROP TABLE"]);
+        let matched = evaluate_plugin_rules("id=1 UNION SELECT * FROM users", &rules);
+        assert!(!matched.is_empty());
+        assert!(matched.contains(&"custom_sqli".to_string()));
+    }
+
+    #[test]
+    fn test_evaluate_plugin_rules_no_match() {
+        let mut rules = HashMap::new();
+        rules.insert("custom_attack", vec!["malicious_payload_12345"]);
+        let matched = evaluate_plugin_rules("normal request content", &rules);
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn test_evaluate_plugin_rules_case_insensitive() {
+        let mut rules = HashMap::new();
+        rules.insert("custom_cmd", vec!["union select"]);
+        let matched = evaluate_plugin_rules("UNION SELECT 1,2,3", &rules);
+        assert!(!matched.is_empty());
+    }
+
+    #[test]
+    fn test_evaluate_plugin_rules_multiple_attack_types() {
+        let mut rules = HashMap::new();
+        rules.insert("custom_xss", vec!["<script>"]);
+        rules.insert("custom_sqli", vec!["UNION SELECT"]);
+        let matched = evaluate_plugin_rules("<script> UNION SELECT", &rules);
+        assert!(matched.len() >= 2);
+        assert!(matched.contains(&"custom_xss".to_string()));
+        assert!(matched.contains(&"custom_sqli".to_string()));
+    }
+
+    #[test]
+    fn test_check_rules_with_plugins_builtin_only() {
+        let (is_malicious, types) = check_rules_with_plugins("<script>alert(1)</script>");
+        assert!(is_malicious);
+        assert!(types.contains(&"xss".to_string()));
+    }
+
+    #[test]
+    fn test_check_rules_with_plugins_normal_request() {
+        let (is_malicious, types) = check_rules_with_plugins("hello world");
+        assert!(!is_malicious);
+        assert!(types.is_empty());
+    }
+
+    #[test]
+    fn test_check_rules_with_plugins_deduplication() {
+        let (is_malicious, types) = check_rules_with_plugins("<script>alert(1)</script>");
+        assert!(is_malicious);
+        let xss_count = types.iter().filter(|t| t.as_str() == "xss").count();
+        assert_eq!(xss_count, 1);
     }
 }

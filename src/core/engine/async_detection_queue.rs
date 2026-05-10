@@ -87,14 +87,17 @@ pub async fn detection_worker(
                     .await;
 
                     let result = AsyncDetectionResult {
-                        request_id: request_id.clone(),
+                        request_id,
                         detection,
                         timestamp: chrono::Utc::now(),
                     };
 
-                    results_clone.insert(request_id, result);
+                    tracing::debug!(
+                        "Async detection completed for request: {}",
+                        result.request_id
+                    );
 
-                    tracing::debug!("Async detection completed for request: {}", request_id);
+                    results_clone.insert(result.request_id.clone(), result);
                 });
             }
             None => {
@@ -147,17 +150,17 @@ pub fn start_async_detection_workers(
                             .await;
 
                             let result = AsyncDetectionResult {
-                                request_id: request_id.clone(),
+                                request_id,
                                 detection,
                                 timestamp: chrono::Utc::now(),
                             };
 
-                            results_clone.insert(request_id, result);
-
                             tracing::debug!(
                                 "Async detection completed for request: {}",
-                                request_id
+                                result.request_id
                             );
+
+                            results_clone.insert(result.request_id.clone(), result);
                         });
                     }
                     None => {

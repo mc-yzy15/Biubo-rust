@@ -1,6 +1,8 @@
 use crate::api::app::AppState;
 use crate::core::engine::async_detection_queue::DetectionTask;
 use crate::core::engine::waf_engine::{detect_request, quick_detect_request};
+use crate::core::reputation::aggregator::ReputationAggregator;
+use crate::core::reputation::manager::ReputationManager;
 use crate::core::security::challenge::{
     get_challenge_token, verify_challenge_token, ChallengeStatus,
 };
@@ -9,7 +11,7 @@ use crate::core::session::manager::{build_log_entry, create_session};
 use crate::data::storage::manager::get_db;
 use crate::services::proxy::forwarder::forward_request;
 use crate::utils::compression::decode_content;
-use crate::utils::http_utils::{get_client_ip, get_ip_reputation, is_static_resource};
+use crate::utils::http_utils::{get_client_ip, is_static_resource};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -237,12 +239,26 @@ async fn reverse_proxy(
             }
         }
 
-        let reputation = get_ip_reputation(&client_ip).await;
-        if !reputation {
+        let reputation_aggregator = ReputationAggregator::with_defaults();
+        let reputation_configs = {
+            let s = state.settings.read();
+            s.ip_reputation_providers.clone()
+        };
+        let reputation_manager = ReputationManager::new(&reputation_configs);
+        let reputation_score = reputation_aggregator.aggregate(&client_ip, &reputation_manager).await;
+
+        let normalized_score = reputation_score.score * 100.0;
+        if normalized_score > 70.0 {
             let db = get_db(&host);
             let _ = db.ban_ip(&client_ip, "bad_ip_reputation", None).await;
             return build_forbidden_response(&state, "403");
         }
+
+        let mut headers_with_reputation = headers.clone();
+        headers_with_reputation.insert(
+            "x-ip-reputation-score".to_string(),
+            normalized_score.to_string(),
+        );
 
         let (file_safe, file_msg) = check_file_security(
             &decoded_body,
@@ -268,7 +284,7 @@ async fn reverse_proxy(
             quick_detect_request(
                 &path,
                 method.as_str(),
-                &headers,
+                &headers_with_reputation,
                 &cookies,
                 &decoded_body,
                 &args_map,

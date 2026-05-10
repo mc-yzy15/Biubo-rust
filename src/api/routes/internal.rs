@@ -87,6 +87,7 @@ struct BanRequest {
 
 pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
+        .route("/health", get(health_check))
         .route("/scripts/biubo/beacon.js", get(beacon))
         .route("/handle/biubo/greeting", post(greeting))
         .route("/handle/biubo/screen", post(receive_screen_data))
@@ -105,6 +106,13 @@ pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/info/biubo/remove_whitelist", get(waf_remove_whitelist))
         .route("/info/biubo/add_whitelist", post(add_whitelist))
         .route("/info/biubo/ban", post(add_blacklist))
+}
+
+async fn health_check() -> Response {
+    Json(json!({
+        "status": "ok",
+        "service": "biubo-waf"
+    })).into_response()
 }
 
 async fn beacon(State(state): State<Arc<AppState>>) -> Response {

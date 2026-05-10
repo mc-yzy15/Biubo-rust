@@ -85,7 +85,7 @@ export function SettingsTab() {
 
   return (
     <div className="tab-panel" id="tab-settings">
-      <div className="card" style={{ maxWidth: 900, margin: '0 auto' }}>
+      <div className="card settings-card">
         <div className="card-title">{t('settings.title')}</div>
 
         <BasicConfig

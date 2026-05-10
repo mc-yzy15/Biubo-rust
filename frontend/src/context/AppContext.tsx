@@ -12,6 +12,7 @@ export function AppProvider({ children }: AppProviderProps) {
   const [hosts, setHosts] = useState<HostInfo[]>([])
   const [currentHost, setCurrentHostState] = useState<string | null>(null)
   const [language, setLanguage] = useState<string>('zh')
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const setCurrentHost = useCallback((host: string) => {
     setCurrentHostState(host)
@@ -26,6 +27,8 @@ export function AppProvider({ children }: AppProviderProps) {
     setHosts,
     setCurrentHost,
     setLanguage,
+    sidebarOpen,
+    setSidebarOpen,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

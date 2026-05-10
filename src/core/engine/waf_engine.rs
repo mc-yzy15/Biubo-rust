@@ -5,9 +5,12 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
+use std::sync::Arc;
 
 use crate::config::settings::Settings;
 use crate::core::engine::rules::COMPILED_RULES;
+use crate::core::engine::threat_signals::{self, ThreatSignals};
+use crate::core::rules::{RuleEngine, WafRequest};
 use crate::data::storage::manager::get_db;
 use crate::services::llm::client::llm_call;
 use crate::utils::http_utils::is_static_resource;
@@ -26,6 +29,13 @@ pub struct DetectionResult {
     pub detection_type: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub attack_types: Vec<String>,
+    pub matched_rule_id: Option<u64>,
+    pub matched_rule_category: Option<String>,
+    pub behavior_score: Option<f64>,
+    pub reputation_score: Option<f64>,
+    pub llm_tier_used: Option<u8>,
+    pub llm_verdict: Option<String>,
+    pub detection_type_enum: Option<String>,
 }
 
 impl DetectionResult {
@@ -33,6 +43,13 @@ impl DetectionResult {
         DetectionResult {
             detection_type: "normal".to_string(),
             attack_types: vec![],
+            matched_rule_id: None,
+            matched_rule_category: None,
+            behavior_score: None,
+            reputation_score: None,
+            llm_tier_used: None,
+            llm_verdict: None,
+            detection_type_enum: Some("normal".to_string()),
         }
     }
 
@@ -40,6 +57,55 @@ impl DetectionResult {
         DetectionResult {
             detection_type: "hacker".to_string(),
             attack_types,
+            matched_rule_id: None,
+            matched_rule_category: None,
+            behavior_score: None,
+            reputation_score: None,
+            llm_tier_used: None,
+            llm_verdict: None,
+            detection_type_enum: Some("rule_match".to_string()),
+        }
+    }
+
+    pub fn from_rule_match(rule_id: u64, category: String, attack_types: Vec<String>) -> Self {
+        DetectionResult {
+            detection_type: "hacker".to_string(),
+            attack_types,
+            matched_rule_id: Some(rule_id),
+            matched_rule_category: Some(category),
+            behavior_score: None,
+            reputation_score: None,
+            llm_tier_used: None,
+            llm_verdict: None,
+            detection_type_enum: Some("rule_match".to_string()),
+        }
+    }
+
+    pub fn from_llm(result: DetectionResult, tier: u8, verdict: String) -> Self {
+        DetectionResult {
+            llm_tier_used: Some(tier),
+            llm_verdict: Some(verdict),
+            detection_type_enum: Some("zero_day_suspected".to_string()),
+            ..result
+        }
+    }
+
+    pub fn from_threat_signals(
+        attack_types: Vec<String>,
+        signals: &ThreatSignals,
+        tier: u8,
+        verdict: String,
+    ) -> Self {
+        DetectionResult {
+            detection_type: "hacker".to_string(),
+            attack_types,
+            matched_rule_id: None,
+            matched_rule_category: None,
+            behavior_score: Some(signals.behavior_score),
+            reputation_score: Some(signals.reputation_score),
+            llm_tier_used: Some(tier),
+            llm_verdict: Some(verdict),
+            detection_type_enum: Some("zero_day_suspected".to_string()),
         }
     }
 
@@ -48,6 +114,13 @@ impl DetectionResult {
         DetectionResult {
             detection_type: "error".to_string(),
             attack_types: vec![],
+            matched_rule_id: None,
+            matched_rule_category: None,
+            behavior_score: None,
+            reputation_score: None,
+            llm_tier_used: None,
+            llm_verdict: None,
+            detection_type_enum: None,
         }
     }
 }
@@ -71,23 +144,33 @@ static HOST_COMPILED_RULES: once_cell::sync::Lazy<DashMap<String, HostCompiledRu
 static HOST_RULE_HASH_CACHE: once_cell::sync::Lazy<DashMap<String, String>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
-/// 缓存统计信息结构体，用于跟踪 WAF 规则缓存的命中和未命中情况
-///
-/// 该结构体记录两种缓存的统计信息：
-/// 1. 规则哈希缓存（HOST_RULE_HASH_CACHE）：存储主机规则的哈希值
-/// 2. 编译规则缓存（HOST_COMPILED_RULES）：存储已编译的正则表达式规则
+static GLOBAL_RULE_ENGINE: once_cell::sync::Lazy<Option<Arc<RuleEngine>>> =
+    once_cell::sync::Lazy::new(|| None);
+
+pub fn set_global_rule_engine(engine: Arc<RuleEngine>) {
+    static ENGINE_REF: once_cell::sync::Lazy<std::sync::Mutex<Option<Arc<RuleEngine>>>> =
+        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+
+    if let Ok(mut guard) = ENGINE_REF.lock() {
+        *guard = Some(engine);
+    }
+}
+
+fn get_global_rule_engine() -> Option<Arc<RuleEngine>> {
+    static ENGINE_REF: once_cell::sync::Lazy<std::sync::Mutex<Option<Arc<RuleEngine>>>> =
+        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+
+    if let Ok(guard) = ENGINE_REF.lock() {
+        guard.clone()
+    } else {
+        None
+    }
+}
+
 struct CacheStats {
-    /// 规则哈希缓存命中次数
-    /// 当请求的规则哈希值已在缓存中时计数
     hash_cache_hits: AtomicU64,
-    /// 规则哈希缓存未命中次数
-    /// 当请求的规则哈希值不在缓存中，需要重新计算时计数
     hash_cache_misses: AtomicU64,
-    /// 编译规则缓存命中次数
-    /// 当已编译的正则表达式规则可直接从缓存获取时计数
     compiled_cache_hits: AtomicU64,
-    /// 编译规则缓存未命中次数
-    /// 当需要重新编译正则表达式规则时计数
     compiled_cache_misses: AtomicU64,
 }
 
@@ -385,6 +468,38 @@ pub async fn detect_request(
 
     let parsed_body = parse_body(body, &content_type);
 
+    if let Some(rule_engine) = get_global_rule_engine() {
+        let waf_req = WafRequest {
+            url: url.to_string(),
+            method: method.to_string(),
+            headers: headers.clone(),
+            query_params: args.clone(),
+            body: parsed_body.clone(),
+            cookies: cookies.clone(),
+        };
+
+        let rule_matches = rule_engine.match_request(&waf_req);
+        if !rule_matches.is_empty() {
+            let first_match = &rule_matches[0];
+            let attack_types: Vec<String> = rule_matches
+                .iter()
+                .map(|m| m.rule.category.as_str().to_string())
+                .collect();
+
+            tracing::info!(
+                rule_id = first_match.rule.id,
+                category = first_match.rule.category.as_str(),
+                "Rule match detected"
+            );
+
+            return DetectionResult::from_rule_match(
+                first_match.rule.id,
+                first_match.rule.category.as_str().to_string(),
+                attack_types,
+            );
+        }
+    }
+
     let host_rules = get_host_rules(host);
 
     let (is_malicious, attack_types) = check_rules(
@@ -416,70 +531,160 @@ pub async fn detect_request(
         return DetectionResult::normal();
     }
 
-    let history = build_history(host, headers);
+    let reputation_score = extract_reputation_score(headers);
+    let ip_history = build_ip_history(host, headers);
 
-    let escaped_url = html_escape_for_prompt(url);
-    let escaped_headers =
-        html_escape_for_prompt(&serde_json::to_string(headers).unwrap_or_default());
-    let escaped_cookies =
-        html_escape_for_prompt(&serde_json::to_string(cookies).unwrap_or_default());
-    let escaped_data = html_escape_for_prompt(&data_combined);
-    let escaped_history = html_escape_for_prompt(&history);
+    let signals = threat_signals::compute_threat_signals(
+        &parsed_body,
+        reputation_score,
+        &ip_history,
+        headers,
+    );
 
-    let prompt = LLM_USER_PROMPT_TEMPLATE
-        .replace("{url}", &optimize_for_llm(&escaped_url, 1024))
-        .replace("{method}", method)
-        .replace("{headers}", &optimize_for_llm(&escaped_headers, 2048))
-        .replace("{cookies}", &optimize_for_llm(&escaped_cookies, 1024))
-        .replace("{data}", &optimize_for_llm(&escaped_data, 8192))
-        .replace("{history}", &escaped_history);
+    if signals.has_any_signal() {
+        let history = build_history(host, headers);
 
-    let full_prompt = format!("{}\n\n{}", LLM_SYSTEM_INSTRUCTION, prompt);
+        let escaped_url = html_escape_for_prompt(url);
+        let escaped_headers =
+            html_escape_for_prompt(&serde_json::to_string(headers).unwrap_or_default());
+        let escaped_cookies =
+            html_escape_for_prompt(&serde_json::to_string(cookies).unwrap_or_default());
+        let escaped_data = html_escape_for_prompt(&data_combined);
+        let escaped_history = html_escape_for_prompt(&history);
 
-    let raw_result = llm_call(&full_prompt, false, None, settings).await;
+        let prompt = LLM_USER_PROMPT_TEMPLATE
+            .replace("{url}", &optimize_for_llm(&escaped_url, 1024))
+            .replace("{method}", method)
+            .replace("{headers}", &optimize_for_llm(&escaped_headers, 2048))
+            .replace("{cookies}", &optimize_for_llm(&escaped_cookies, 1024))
+            .replace("{data}", &optimize_for_llm(&escaped_data, 8192))
+            .replace("{history}", &escaped_history);
 
-    let result = match extract_json(&raw_result) {
-        Some(v) => v,
-        None => {
-            tracing::error!(
-                "LLM detection failed for {} (Invalid LLM response format)",
-                url
-            );
-            return DetectionResult::normal();
+        let full_prompt = format!("{}\n\n{}", LLM_SYSTEM_INSTRUCTION, prompt);
+
+        let raw_result = llm_call(&full_prompt, false, None, settings).await;
+
+        let result = match extract_json(&raw_result) {
+            Some(v) => v,
+            None => {
+                tracing::error!(
+                    "LLM detection failed for {} (Invalid LLM response format)",
+                    url
+                );
+                return DetectionResult::normal();
+            }
+        };
+
+        let detection = match serde_json::from_value::<DetectionResult>(result) {
+            Ok(d) => d,
+            Err(_) => {
+                tracing::error!(
+                    "LLM detection failed for {} (Invalid LLM response format)",
+                    url
+                );
+                return DetectionResult::normal();
+            }
+        };
+
+        let llm_verdict = detection.detection_type.clone();
+        let enhanced_result = DetectionResult::from_threat_signals(
+            detection.attack_types,
+            &signals,
+            1,
+            llm_verdict.clone(),
+        );
+
+        if DETECTION_CACHE.len() >= MAX_CACHE_SIZE {
+            let keys: Vec<String> = DETECTION_CACHE
+                .iter()
+                .take(1000)
+                .map(|e| e.key().clone())
+                .collect();
+            for k in keys {
+                DETECTION_CACHE.remove(&k);
+            }
         }
+
+        DETECTION_CACHE.insert(
+            key,
+            CacheEntry {
+                timestamp: std::time::Instant::now(),
+                data: enhanced_result.clone(),
+            },
+        );
+
+        return enhanced_result;
+    }
+
+    DetectionResult::normal()
+}
+
+fn extract_reputation_score(headers: &HashMap<String, String>) -> f64 {
+    headers
+        .get("x-ip-reputation-score")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+fn build_ip_history(host: &str, headers: &HashMap<String, String>) -> Vec<threat_signals::RequestRecord> {
+    let db = get_db(host);
+    let client_ip = headers
+        .get("x-real-ip")
+        .or_else(|| headers.get("x-forwarded-for"))
+        .or_else(|| headers.get("cf-connecting-ip"))
+        .cloned()
+        .unwrap_or_default();
+
+    let log_db = match db.get_log_db() {
+        Some(ldb) => ldb,
+        None => return vec![],
     };
 
-    let detection = match serde_json::from_value::<DetectionResult>(result) {
-        Ok(d) => d,
-        Err(_) => {
-            tracing::error!(
-                "LLM detection failed for {} (Invalid LLM response format)",
-                url
-            );
-            return DetectionResult::normal();
-        }
+    let logs = match log_db.get("logs") {
+        Some(v) => match v.as_array() {
+            Some(arr) => arr.clone(),
+            None => return vec![],
+        },
+        None => return vec![],
     };
 
-    if DETECTION_CACHE.len() >= MAX_CACHE_SIZE {
-        let keys: Vec<String> = DETECTION_CACHE
-            .iter()
-            .take(1000)
-            .map(|e| e.key().clone())
-            .collect();
-        for k in keys {
-            DETECTION_CACHE.remove(&k);
+    let mut history = vec![];
+
+    for entry in logs.iter().rev().take(10) {
+        let entry_ip = entry.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+        let entry_cdn_ip = entry.get("cdn_ip").and_then(|v| v.as_str()).unwrap_or("");
+
+        if entry_ip == client_ip || entry_cdn_ip == client_ip {
+            let timestamp = entry
+                .get("timestamp")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let method = entry
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("GET")
+                .to_string();
+            let status_code = entry
+                .get("status")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(200) as u16;
+            let is_suspicious = entry
+                .get("is_suspicious")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            history.push(threat_signals::RequestRecord {
+                timestamp,
+                url,
+                method,
+                status_code,
+                is_suspicious,
+            });
         }
     }
 
-    DETECTION_CACHE.insert(
-        key,
-        CacheEntry {
-            timestamp: std::time::Instant::now(),
-            data: detection.clone(),
-        },
-    );
-
-    detection
+    history
 }
 
 fn build_history(host: &str, headers: &HashMap<String, String>) -> String {
@@ -661,6 +866,32 @@ pub fn quick_detect_request(
     }
 
     let parsed_body = parse_body(body, &content_type);
+
+    if let Some(rule_engine) = get_global_rule_engine() {
+        let waf_req = WafRequest {
+            url: url.to_string(),
+            method: method.to_string(),
+            headers: headers.clone(),
+            query_params: args.clone(),
+            body: parsed_body.clone(),
+            cookies: cookies.clone(),
+        };
+
+        let rule_matches = rule_engine.match_request(&waf_req);
+        if !rule_matches.is_empty() {
+            let first_match = &rule_matches[0];
+            let attack_types: Vec<String> = rule_matches
+                .iter()
+                .map(|m| m.rule.category.as_str().to_string())
+                .collect();
+
+            return DetectionResult::from_rule_match(
+                first_match.rule.id,
+                first_match.rule.category.as_str().to_string(),
+                attack_types,
+            );
+        }
+    }
 
     let host_rules = get_host_rules(host);
 

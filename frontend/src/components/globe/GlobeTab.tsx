@@ -1,4 +1,4 @@
-import { useContext } from 'react'
+import { useContext, useState } from 'react'
 import { AppContext } from '../../context/AppContext'
 import { useGlobeData } from '../../hooks/useGlobeData'
 import { GlobeView } from './GlobeView'
@@ -13,6 +13,7 @@ import { GlobeControls } from './GlobeControls'
 export function GlobeTab() {
   const ctx = useContext(AppContext)
   const currentHost = ctx?.currentHost ?? null
+  const [rightPanelOpen, setRightPanelOpen] = useState(false)
 
   const {
     attackData,
@@ -71,7 +72,7 @@ export function GlobeTab() {
           <AttackTypeBars typeCounts={typeCounts} />
         </div>
 
-        <div className="g-panel-right">
+        <div className={`g-panel-right${rightPanelOpen ? ' mobile-show' : ''}`}>
           <CountryList countryCounts={countryCounts} />
           <ThreatLevel total={stats.total} />
           <TimeRangePicker onReload={handleReload} />
@@ -86,6 +87,21 @@ export function GlobeTab() {
             serverNode={serverNodeRef}
           />
         </div>
+
+        <button
+          className="ctrl-btn"
+          style={{
+            position: 'absolute',
+            top: 12,
+            right: 12,
+            zIndex: 25,
+            padding: '8px 14px',
+            fontSize: 12
+          }}
+          onClick={() => setRightPanelOpen(!rightPanelOpen)}
+        >
+          {rightPanelOpen ? 'Hide Details' : 'Show Details'}
+        </button>
 
         <GlobeControls
           autoRotate={autoRotate}

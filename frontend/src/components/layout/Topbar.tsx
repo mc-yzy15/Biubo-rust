@@ -9,7 +9,7 @@ interface HostOption {
 }
 
 export function Topbar() {
-  const { hosts, currentHost, setCurrentHost, language, setLanguage, setHosts } = useApp()
+  const { hosts, currentHost, setCurrentHost, language, setLanguage, setHosts, sidebarOpen, setSidebarOpen } = useApp()
   const { t, i18n } = useTranslation()
   const [time, setTime] = useState(new Date().toLocaleTimeString())
   const [hostDropdownOpen, setHostDropdownOpen] = useState(false)
@@ -80,6 +80,17 @@ export function Topbar() {
   return (
     <header className="topbar">
       <div className="tb-left">
+        <button
+          className="hamburger-btn"
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          aria-label="Toggle sidebar"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
         <span className="live-dot">{t('topbar.live')}</span>
         <span className="tb-time">{time}</span>
 

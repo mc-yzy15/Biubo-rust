@@ -1140,6 +1140,19 @@ select option {
   word-break: break-all
 }
 
+/* ── Settings Card ── */
+.settings-card {
+  max-width: 900px;
+  margin: 0 auto
+}
+
+@media (max-width: 767px) {
+  .settings-card {
+    max-width: 100%;
+    margin: 0
+  }
+}
+
 /* ── Settings Form ── */
 .st-group { margin-bottom: 24px; border-bottom: 1px solid rgba(0, 200, 255, 0.05); padding-bottom: 20px; }
 .st-header { font-size: 13px; font-weight: 700; color: var(--accent); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; }
@@ -1156,3 +1169,472 @@ select option {
 .st-footer { display: flex; justify-content: flex-end; gap: 15px; margin-top: 30px; }
 .st-btn-save { background: var(--accent); color: #000; border: none; padding: 10px 30px; border-radius: 4px; font-weight: 700; cursor: pointer; transition: all .2s; font-family: 'Rajdhani', sans-serif; letter-spacing: 1.5px; text-transform: uppercase; }
 .st-btn-save:hover { box-shadow: 0 0 15px var(--accent); transform: translateY(-1px); }
+
+/* ========================================
+   ── Responsive: Tablet (< 1024px) ──
+   ======================================== */
+@media (max-width: 1023px) {
+  .sidebar {
+    width: 200px
+  }
+
+  .grid-4 {
+    grid-template-columns: repeat(2, 1fr)
+  }
+
+  .grid-3 {
+    grid-template-columns: repeat(2, 1fr)
+  }
+
+  .stat-val {
+    font-size: 28px
+  }
+
+  .g-panel-left {
+    width: 200px
+  }
+
+  .g-panel-right {
+    width: 190px
+  }
+}
+
+/* ========================================
+   ── Responsive: Mobile (< 768px) ──
+   ======================================== */
+@media (max-width: 767px) {
+  /* Touch-friendly tap targets */
+  button,
+  .sb-item,
+  .tb-btn,
+  .ctrl-btn,
+  .pg-btn,
+  .ip-del,
+  .st-btn-save,
+  input[type="button"],
+  input[type="submit"] {
+    min-height: 44px;
+    min-width: 44px
+  }
+
+  /* Sidebar as overlay */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform .3s cubic-bezier(.4, 0, .2, 1);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, .5);
+    background: var(--sidebar)
+  }
+
+  .sidebar.open {
+    transform: translateX(0)
+  }
+
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .6);
+    z-index: 999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .3s ease
+  }
+
+  .sidebar-overlay.open {
+    opacity: 1;
+    pointer-events: auto
+  }
+
+  /* Hamburger menu button */
+  .hamburger-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    padding: 8px;
+    min-width: 44px;
+    min-height: 44px
+  }
+
+  .hamburger-btn svg {
+    width: 22px;
+    height: 22px
+  }
+
+  /* Topbar responsive */
+  .topbar {
+    height: auto;
+    min-height: 56px;
+    padding: 10px 16px;
+    flex-wrap: wrap;
+    gap: 8px
+  }
+
+  .tb-left {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 10px
+  }
+
+  .tb-right {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap
+  }
+
+  .tb-btn {
+    font-size: 13px;
+    padding: 8px 14px;
+    flex: 1;
+    text-align: center;
+    justify-content: center;
+    display: flex
+  }
+
+  .tb-time {
+    font-size: 12px
+  }
+
+  /* Content area */
+  .content {
+    padding: 16px
+  }
+
+  /* Grid layouts stack to single column */
+  .grid-4,
+  .grid-3,
+  .grid-2 {
+    grid-template-columns: 1fr
+  }
+
+  /* Cards */
+  .card {
+    padding: 14px 16px
+  }
+
+  .card-title {
+    font-size: 11px;
+    margin-bottom: 10px
+  }
+
+  /* Stat cards */
+  .stat-card {
+    padding: 14px 16px
+  }
+
+  .stat-label {
+    font-size: 10px;
+    margin-bottom: 6px
+  }
+
+  .stat-val {
+    font-size: 24px
+  }
+
+  /* Tables - horizontal scroll */
+  .tbl-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch
+  }
+
+  .tbl {
+    min-width: 500px;
+    font-size: 13px
+  }
+
+  .tbl th,
+  .tbl td {
+    padding: 8px 10px
+  }
+
+  /* Add form stacks vertically */
+  .add-form {
+    flex-direction: column;
+    gap: 8px
+  }
+
+  .add-form input {
+    min-width: unset;
+    width: 100%
+  }
+
+  .add-form button {
+    width: 100%
+  }
+
+  /* IP rows stack on mobile */
+  .ip-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 12px
+  }
+
+  .ip-meta {
+    flex: unset;
+    font-size: 12px
+  }
+
+  .ip-del {
+    align-self: flex-end
+  }
+
+  /* Settings form */
+  .st-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px
+  }
+
+  .st-lbl {
+    width: 100%
+  }
+
+  .st-ctrl input,
+  .st-ctrl select {
+    padding: 10px 12px;
+    font-size: 14px
+  }
+
+  .st-btn-save {
+    width: 100%;
+    padding: 12px 20px
+  }
+
+  .st-footer {
+    margin-top: 20px
+  }
+
+  /* Globe panels */
+  .g-panel-left {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    width: calc(100% - 16px);
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 8px;
+    max-width: 100%
+  }
+
+  .g-panel-right {
+    display: none
+  }
+
+  .g-panel-right.mobile-show {
+    display: flex;
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    left: 8px;
+    width: calc(100% - 16px);
+    flex-direction: column;
+    bottom: 80px;
+    max-height: 50vh;
+    overflow-y: auto
+  }
+
+  .g-card {
+    min-width: 180px;
+    flex-shrink: 0
+  }
+
+  .g-controls {
+    flex-wrap: wrap;
+    border-radius: 12px;
+    padding: 10px 14px;
+    gap: 6px;
+    bottom: 12px;
+    justify-content: center
+  }
+
+  .ctrl-btn {
+    padding: 8px 12px;
+    font-size: 11px
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr 1fr
+  }
+
+  .stat-item .val {
+    font-size: 18px
+  }
+
+  /* Detail rows */
+  .detail-row {
+    flex-direction: column;
+    gap: 2px
+  }
+
+  .detail-key {
+    min-width: unset
+  }
+
+  /* Badge sizes */
+  .badge {
+    padding: 4px 10px;
+    font-size: 10px
+  }
+
+  /* Pagination */
+  .pagination {
+    flex-wrap: wrap;
+    gap: 6px
+  }
+
+  .pg-btn {
+    padding: 8px 12px
+  }
+
+  /* Toast */
+  .toast {
+    bottom: 12px;
+    right: 12px;
+    left: 12px
+  }
+
+  .toast-item {
+    min-width: unset
+  }
+
+  /* Modal */
+  .modal {
+    width: calc(100% - 32px);
+    padding: 20px 24px;
+    max-height: 85vh
+  }
+
+  .modal-title {
+    font-size: 13px;
+    margin-bottom: 16px
+  }
+
+  /* Replay controls */
+  .replay-controls {
+    gap: 8px
+  }
+
+  .replay-controls input {
+    padding: 8px 10px;
+    width: 100%
+  }
+
+  /* Gauges */
+  .gauge-val {
+    font-size: 20px
+  }
+
+  .gauge-label {
+    font-size: 10px
+  }
+
+  /* Country list mobile */
+  .country-row {
+    gap: 6px;
+    padding: 6px 0
+  }
+
+  .country-name {
+    font-size: 10px
+  }
+
+  .type-label {
+    font-size: 8px;
+    width: 42px
+  }
+
+  .type-count {
+    font-size: 8px;
+    width: 20px
+  }
+
+  .feed-item {
+    padding: 8px
+  }
+
+  .feed-type {
+    font-size: 8px
+  }
+
+  .feed-time {
+    font-size: 7px
+  }
+
+  .feed-route {
+    font-size: 9px
+  }
+
+  /* Logo in sidebar */
+  .sb-logo {
+    padding: 16px 14px 14px
+  }
+
+  .sb-logo h1 {
+    font-size: 14px
+  }
+
+  .sb-item {
+    padding: 12px 16px;
+    font-size: 14px
+  }
+
+  .sb-section {
+    padding: 14px 14px 6px
+  }
+}
+
+/* ========================================
+   ── Responsive: Small Mobile (< 480px) ──
+   ======================================== */
+@media (max-width: 479px) {
+  .stat-val {
+    font-size: 20px
+  }
+
+  .stat-label {
+    font-size: 9px
+  }
+
+  .card-title {
+    font-size: 10px
+  }
+
+  .content {
+    padding: 12px
+  }
+
+  .topbar {
+    padding: 8px 12px
+  }
+
+  .g-controls {
+    padding: 8px 10px;
+    gap: 4px
+  }
+
+  .ctrl-btn {
+    padding: 6px 10px;
+    font-size: 10px
+  }
+
+  .g-panel-left {
+    flex-direction: column;
+    overflow-x: unset;
+    overflow-y: auto
+  }
+
+  .g-card {
+    min-width: unset
+  }
+}

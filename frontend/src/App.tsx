@@ -6,6 +6,7 @@ import { LogsTab } from './components/logs'
 import { IPManagerTab } from './components/ipmanager'
 import { SystemTab } from './components/system'
 import { SettingsTab } from './components/settings'
+import { PluginManager } from './components/plugins'
 import './styles/global.css'
 
 const TAB_COMPONENTS: Record<string, React.ComponentType> = {
@@ -15,6 +16,7 @@ const TAB_COMPONENTS: Record<string, React.ComponentType> = {
   ipmanage: IPManagerTab,
   system: SystemTab,
   settings: SettingsTab,
+  plugins: PluginManager,
 }
 
 function App() {
