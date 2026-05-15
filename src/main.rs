@@ -2,10 +2,12 @@ use crate::api::app::create_app_with_async_detection;
 use crate::config::settings::{Settings, SharedSettings};
 use crate::core::engine::async_detection_queue::start_async_detection_workers;
 use crate::services::ssl::SslManager;
-use axum::Router;
-use axum::routing::get;
 use axum::response::Redirect;
+use axum::routing::get;
+use axum::Router;
 use std::sync::Arc;
+use tokio_rustls::server::TlsStream;
+use tokio_rustls::TlsAcceptor;
 use tracing_subscriber::EnvFilter;
 
 mod api;
@@ -16,7 +18,6 @@ mod data;
 mod plugins;
 mod services;
 mod utils;
-
 
 #[tokio::main]
 async fn main() {
@@ -54,7 +55,10 @@ async fn main() {
     if host_count > 0 {
         let hosts: Vec<String> = settings.read().proxy_map.keys().cloned().collect();
         core::engine::waf_engine::initialize_waf_cache_background(hosts);
-        tracing::info!("WAF cache preloading started for {} hosts (background)", host_count);
+        tracing::info!(
+            "WAF cache preloading started for {} hosts (background)",
+            host_count
+        );
     }
 
     let async_detection_queue = start_async_detection_workers(4, 1000, settings.clone());
@@ -74,7 +78,11 @@ async fn main() {
         let redirect_listener = match tokio::net::TcpListener::bind(redirect_addr).await {
             Ok(l) => l,
             Err(e) => {
-                tracing::error!("Failed to bind HTTP redirect listener to {}: {}", redirect_addr, e);
+                tracing::error!(
+                    "Failed to bind HTTP redirect listener to {}: {}",
+                    redirect_addr,
+                    e
+                );
                 std::process::exit(1);
             }
         };
@@ -107,13 +115,15 @@ async fn main() {
 
         tracing::info!("HTTPS server serving on 0.0.0.0:{}...", ssl_port);
 
-        let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(
-            ssl_manager.get_server_config().expect("TLS config not available")
+        let tls_acceptor = TlsAcceptor::from(Arc::new(
+            ssl_manager
+                .get_server_config()
+                .expect("TLS config not available"),
         ));
 
         loop {
-            let (tcp_stream, _) = match tls_listener.accept().await {
-                Ok(conn) => conn,
+            let (tcp_stream, peer_addr) = match tls_listener.accept().await {
+                Ok(tuple) => tuple,
                 Err(e) => {
                     tracing::error!("Failed to accept TLS connection: {}", e);
                     continue;
@@ -127,12 +137,16 @@ async fn main() {
                 match tls_acceptor.accept(tcp_stream).await {
                     Ok(tls_stream) => {
                         let _ = axum::serve(
-                            tokio_rustls::server::TlsStream::new(tls_stream),
+                            TlsListenerWrapper {
+                                tls_stream: Some(tls_stream),
+                                peer_addr,
+                            },
                             app,
-                        ).await;
+                        )
+                        .await;
                     }
                     Err(e) => {
-                        tracing::warn!("TLS handshake failed: {}", e);
+                        tracing::warn!("TLS handshake failed for {}: {}", peer_addr, e);
                     }
                 }
             });
@@ -157,4 +171,26 @@ async fn main() {
 
 async fn https_redirect_handler() -> impl axum::response::IntoResponse {
     Redirect::permanent("https://localhost")
+}
+
+struct TlsListenerWrapper {
+    tls_stream: Option<TlsStream<tokio::net::TcpStream>>,
+    peer_addr: std::net::SocketAddr,
+}
+
+impl axum::serve::Listener for TlsListenerWrapper {
+    type Io = TlsStream<tokio::net::TcpStream>;
+    type Addr = std::net::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        if let Some(stream) = self.tls_stream.take() {
+            (stream, self.peer_addr)
+        } else {
+            std::future::pending().await
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        Ok(self.peer_addr)
+    }
 }

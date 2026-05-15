@@ -202,7 +202,7 @@ pub fn compute_threat_signals(
 }
 
 fn compute_behavior_score(headers: &HashMap<String, String>, body: &str) -> f64 {
-    let mut score = 0.0;
+    let mut score: f64 = 0.0;
 
     let has_ua = headers.contains_key("user-agent");
     let has_accept = headers.contains_key("accept");

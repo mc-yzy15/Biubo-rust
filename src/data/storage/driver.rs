@@ -92,7 +92,7 @@ pub async fn create_driver_async(config: StorageConfig) -> Result<Arc<dyn Storag
                 .ok_or_else(|| StorageDriverError::ConnectionError(
                     "PostgreSQL URL is required for PostgreSQL driver".to_string()
                 ))?;
-            let driver = PostgreSQLDriver::new(url).await?;
+            let driver = PostgreSQLDriver::new(&url).await?;
             Ok(Arc::new(driver))
         }
     }

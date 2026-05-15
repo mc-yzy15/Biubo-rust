@@ -76,10 +76,7 @@ impl AbuseIPDBProvider {
 #[async_trait]
 impl ReputationProvider for AbuseIPDBProvider {
     async fn query(&self, ip: &str) -> Result<ReputationProviderResult, ProviderError> {
-        let url = format!(
-            "{}/api/v2/check?ipAddress={}",
-            self.base_url, ip
-        );
+        let url = format!("{}/api/v2/check?ipAddress={}", self.base_url, ip);
 
         let response = self
             .client
@@ -147,7 +144,7 @@ impl GreyNoiseProvider {
         }
     }
 
-    fn map_verdict_to_score(verdict: &str) -> (f64, bool) {
+    pub(crate) fn map_verdict_to_score(verdict: &str) -> (f64, bool) {
         match verdict.to_lowercase().as_str() {
             "malicious" => (1.0, true),
             "bad" => (0.8, true),
@@ -162,10 +159,7 @@ impl GreyNoiseProvider {
 #[async_trait]
 impl ReputationProvider for GreyNoiseProvider {
     async fn query(&self, ip: &str) -> Result<ReputationProviderResult, ProviderError> {
-        let url = format!(
-            "{}/v3/community/{}",
-            self.base_url, ip
-        );
+        let url = format!("{}/v3/community/{}", self.base_url, ip);
 
         let response = self
             .client
@@ -191,15 +185,9 @@ impl ReputationProvider for GreyNoiseProvider {
             .unwrap_or("unknown");
 
         let (score, is_listed) = Self::map_verdict_to_score(verdict);
-        let noise = json
-            .get("noise")
-            .and_then(|n| n.as_bool())
-            .unwrap_or(false);
+        let noise = json.get("noise").and_then(|n| n.as_bool()).unwrap_or(false);
 
-        let details = format!(
-            "GreyNoise verdict: {}, noise: {}",
-            verdict, noise
-        );
+        let details = format!("GreyNoise verdict: {}, noise: {}", verdict, noise);
 
         Ok(ReputationProviderResult {
             provider_name: self.name().to_string(),
@@ -244,10 +232,7 @@ impl VirusTotalProvider {
 #[async_trait]
 impl ReputationProvider for VirusTotalProvider {
     async fn query(&self, ip: &str) -> Result<ReputationProviderResult, ProviderError> {
-        let url = format!(
-            "{}/api/v3/ip_addresses/{}",
-            self.base_url, ip
-        );
+        let url = format!("{}/api/v3/ip_addresses/{}", self.base_url, ip);
 
         let response = self
             .client
@@ -267,12 +252,9 @@ impl ReputationProvider for VirusTotalProvider {
         }
 
         let json: serde_json::Value = response.json().await?;
-        let attributes = json
-            .get("data")
-            .and_then(|d| d.get("attributes"));
+        let attributes = json.get("data").and_then(|d| d.get("attributes"));
 
-        let last_analysis_stats = attributes
-            .and_then(|a| a.get("last_analysis_stats"));
+        let last_analysis_stats = attributes.and_then(|a| a.get("last_analysis_stats"));
 
         let malicious = last_analysis_stats
             .and_then(|s| s.get("malicious"))
@@ -282,27 +264,18 @@ impl ReputationProvider for VirusTotalProvider {
         let total = last_analysis_stats
             .map(|s| {
                 s.as_object()
-                    .map(|obj| {
-                        obj.values()
-                            .filter_map(|v| v.as_f64())
-                            .sum::<f64>()
-                    })
+                    .map(|obj| obj.values().filter_map(|v| v.as_f64()).sum::<f64>())
                     .unwrap_or(0.0)
             })
             .unwrap_or(0.0);
 
-        let malicious_ratio = if total > 0.0 {
-            malicious / total
-        } else {
-            0.0
-        };
+        let malicious_ratio = if total > 0.0 { malicious / total } else { 0.0 };
 
         let is_listed = malicious > 5.0;
 
         let details = format!(
             "VirusTotal: {}/{} engines flagged as malicious",
-            malicious as u64,
-            total as u64
+            malicious as u64, total as u64
         );
 
         Ok(ReputationProviderResult {
@@ -335,10 +308,14 @@ impl IPInfoProvider {
             .build()
             .unwrap_or_default();
 
-        Self { client, weight, base_url: base_url.unwrap_or_else(|| "https://ipinfo.io".to_string()) }
+        Self {
+            client,
+            weight,
+            base_url: base_url.unwrap_or_else(|| "https://ipinfo.io".to_string()),
+        }
     }
 
-    fn calculate_risk_score(
+    pub(crate) fn calculate_risk_score(
         hosting: bool,
         privacy: bool,
         proxy: bool,
@@ -367,10 +344,7 @@ impl IPInfoProvider {
 #[async_trait]
 impl ReputationProvider for IPInfoProvider {
     async fn query(&self, ip: &str) -> Result<ReputationProviderResult, ProviderError> {
-        let url = format!(
-            "{}/{}/json",
-            self.base_url, ip
-        );
+        let url = format!("{}/{}/json", self.base_url, ip);
 
         let response = self.client.get(&url).send().await?;
 
@@ -408,8 +382,7 @@ impl ReputationProvider for IPInfoProvider {
 
         let privacy_flag = hosting || proxy || tor || vpn;
 
-        let (score, is_listed) =
-            Self::calculate_risk_score(hosting, privacy_flag, proxy, tor);
+        let (score, is_listed) = Self::calculate_risk_score(hosting, privacy_flag, proxy, tor);
 
         let details = format!(
             "IPInfo: hosting={}, proxy={}, tor={}, vpn={}",
@@ -451,11 +424,8 @@ impl SpamhausProvider {
         Self { resolver, weight }
     }
 
-    fn reverse_ip(ip: &str) -> String {
-        ip.split('.')
-            .rev()
-            .collect::<Vec<&str>>()
-            .join(".")
+    pub(crate) fn reverse_ip(ip: &str) -> String {
+        ip.split('.').rev().collect::<Vec<&str>>().join(".")
     }
 }
 

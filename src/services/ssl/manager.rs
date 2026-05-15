@@ -1,15 +1,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::RwLock;
-use rustls_acme::caches::DirCache;
-use rustls_acme::AcmeConfig;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::time::interval;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertificateState {
@@ -48,7 +46,7 @@ pub struct SslManager {
     pub email: String,
     pub cert_dir: PathBuf,
     pub challenge_handler: Arc<Http01ChallengeHandler>,
-    pub acme_state: Option<rustls_acme::AcmeState<DirCache>>,
+    pub server_config: Arc<RwLock<Option<rustls::ServerConfig>>>,
     pub certificate_states: HashMap<String, CertificateState>,
 }
 
@@ -59,7 +57,7 @@ impl SslManager {
             email,
             cert_dir,
             challenge_handler: Arc::new(Http01ChallengeHandler::new()),
-            acme_state: None,
+            server_config: Arc::new(RwLock::new(None)),
             certificate_states: HashMap::new(),
         }
     }
@@ -69,14 +67,13 @@ impl SslManager {
 
         self.load_certificate_states().await?;
 
-        let cache = DirCache::new(&self.cert_dir);
+        let (config, _acme_state) = super::tls_config::build_acme_tls_config(
+            self.domains.clone(),
+            self.email.clone(),
+            self.cert_dir.clone(),
+        )?;
 
-        let mut state = AcmeConfig::new(&self.domains)
-            .contact_push(format!("mailto:{}", self.email))
-            .cache(cache)
-            .state();
-
-        self.acme_state = Some(state);
+        *self.server_config.write() = Some(config);
 
         info!("SSL Manager initialized for domains: {:?}", self.domains);
         info!("Certificate directory: {:?}", self.cert_dir);
@@ -84,7 +81,13 @@ impl SslManager {
         Ok(())
     }
 
-    async fn load_certificate_states(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn get_server_config(&self) -> Option<rustls::ServerConfig> {
+        self.server_config.read().clone()
+    }
+
+    async fn load_certificate_states(
+        &mut self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state_file = self.cert_dir.join("certificates.json");
 
         if !state_file.exists() {
@@ -101,7 +104,10 @@ impl SslManager {
             if self.is_certificate_expired(state) {
                 warn!("Certificate for {} is expired", domain);
             } else if self.is_certificate_near_expiry(state) {
-                info!("Certificate for {} needs renewal (within 30 days of expiry)", domain);
+                info!(
+                    "Certificate for {} needs renewal (within 30 days of expiry)",
+                    domain
+                );
             } else {
                 info!("Certificate for {} is valid", domain);
             }
@@ -110,7 +116,9 @@ impl SslManager {
         Ok(())
     }
 
-    async fn save_certificate_states(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn save_certificate_states(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state_file = self.cert_dir.join("certificates.json");
         let content = serde_json::to_string_pretty(&self.certificate_states)?;
         fs::write(&state_file, content).await?;
@@ -138,7 +146,7 @@ impl SslManager {
     pub async fn start_renewal_worker(&self) {
         let cert_dir = self.cert_dir.clone();
         let domains = self.domains.clone();
-        let email = self.email.clone();
+        let _email = self.email.clone();
 
         tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(24 * 60 * 60));
@@ -180,15 +188,11 @@ impl SslManager {
             }
         });
     }
-
-    pub fn get_server_config(&self) -> Option<rustls::ServerConfig> {
-        self.acme_state.as_ref().map(|state| {
-            state.server_config().clone()
-        })
-    }
 }
 
-async fn check_certificate_expiry(cert_path: &Path) -> Result<Duration, Box<dyn std::error::Error + Send + Sync>> {
+async fn check_certificate_expiry(
+    cert_path: &Path,
+) -> Result<Duration, Box<dyn std::error::Error + Send + Sync>> {
     let cert_data = fs::read(cert_path).await?;
 
     let cert_pem = String::from_utf8_lossy(&cert_data);

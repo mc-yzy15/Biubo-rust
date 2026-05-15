@@ -32,24 +32,21 @@ impl PostgreSQLDriver {
         let driver = Self { pool };
         driver.run_migration().await?;
 
-        tracing::info!(
-            "[PostgreSQLDriver] Connected to PostgreSQL and migration applied"
-        );
+        tracing::info!("[PostgreSQLDriver] Connected to PostgreSQL and migration applied");
         Ok(driver)
     }
 
     fn parse_url(url: &str) -> Result<Config, StorageDriverError> {
-        let config = Config::new(url).map_err(|e| {
-            StorageDriverError::ConnectionError(format!("Invalid PostgreSQL URL: {}", e))
-        })?;
-
-        Ok(Config {
-            manager: Some(ManagerConfig {
-                recycling_method: RecyclingMethod::Fast,
-            }),
-            max_size: Some(MAX_POOL_SIZE),
-            ..config
-        })
+        let mut config = Config::new();
+        config.url = Some(url.to_string());
+        config.manager = Some(ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        });
+        config.pool = Some(deadpool_postgres::PoolConfig {
+            max_size: MAX_POOL_SIZE,
+            ..Default::default()
+        });
+        Ok(config)
     }
 
     async fn run_migration(&self) -> Result<(), StorageDriverError> {
@@ -78,25 +75,19 @@ impl PostgreSQLDriver {
             ))
         })?;
 
-        client
-            .batch_execute(&create_table_sql)
-            .await
-            .map_err(|e| {
-                StorageDriverError::OperationError(format!(
-                    "Failed to create table '{}': {}",
-                    TABLE_NAME, e
-                ))
-            })?;
+        client.batch_execute(&create_table_sql).await.map_err(|e| {
+            StorageDriverError::OperationError(format!(
+                "Failed to create table '{}': {}",
+                TABLE_NAME, e
+            ))
+        })?;
 
-        client
-            .batch_execute(&create_index_sql)
-            .await
-            .map_err(|e| {
-                StorageDriverError::OperationError(format!(
-                    "Failed to create index on '{}': {}",
-                    TABLE_NAME, e
-                ))
-            })?;
+        client.batch_execute(&create_index_sql).await.map_err(|e| {
+            StorageDriverError::OperationError(format!(
+                "Failed to create index on '{}': {}",
+                TABLE_NAME, e
+            ))
+        })?;
 
         Ok(())
     }
@@ -117,10 +108,7 @@ impl StorageDriver for PostgreSQLDriver {
             }
         };
 
-        let query = format!(
-            "SELECT value FROM {} WHERE key = $1",
-            TABLE_NAME
-        );
+        let query = format!("SELECT value FROM {} WHERE key = $1", TABLE_NAME);
 
         match client.query_opt(&query, &[&key]).await {
             Ok(Some(row)) => row_to_value(&row),

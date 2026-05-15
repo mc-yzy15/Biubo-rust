@@ -1,6 +1,6 @@
 use crate::api::app::AppState;
 use crate::core::engine::async_detection_queue::DetectionTask;
-use crate::core::engine::waf_engine::{detect_request, quick_detect_request};
+use crate::core::engine::waf_engine::quick_detect_request;
 use crate::core::reputation::aggregator::ReputationAggregator;
 use crate::core::reputation::manager::ReputationManager;
 use crate::core::security::challenge::{

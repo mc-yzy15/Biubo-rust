@@ -6,7 +6,7 @@ use std::f64::consts::E;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::time::{interval, Duration as TokioDuration};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::core::models::{BehaviorMetric, BehaviorProfile, BehaviorScore, BehaviorScoreBreakdown};
 
@@ -87,15 +87,19 @@ impl BehaviorMetricsCollector {
             user_agent: user_agent.to_string(),
         };
 
-        let mut ip_metrics = self.metrics.entry(ip.to_string()).or_insert_with(|| {
-            IPBehaviorMetrics::new(now)
-        });
+        let mut ip_metrics = self
+            .metrics
+            .entry(ip.to_string())
+            .or_insert_with(|| IPBehaviorMetrics::new(now));
 
         self.prune_old_requests(&mut ip_metrics.value_mut(), now);
 
         ip_metrics.value_mut().requests.push_back(record.clone());
         ip_metrics.value_mut().unique_paths.insert(url.to_string());
-        ip_metrics.value_mut().user_agents.insert(user_agent.to_string());
+        ip_metrics
+            .value_mut()
+            .user_agents
+            .insert(user_agent.to_string());
 
         if status_code >= 400 {
             ip_metrics.value_mut().error_count += 1;
@@ -122,8 +126,13 @@ impl BehaviorMetricsCollector {
                 error_rate: 0.0,
             };
 
-            let active_requests: Vec<_> = metrics.requests.iter()
-                .filter(|r| now.signed_duration_since(r.timestamp).num_seconds() <= self.config.window_seconds as i64)
+            let active_requests: Vec<_> = metrics
+                .requests
+                .iter()
+                .filter(|r| {
+                    now.signed_duration_since(r.timestamp).num_seconds()
+                        <= self.config.window_seconds as i64
+                })
                 .cloned()
                 .collect();
 
@@ -148,9 +157,10 @@ impl BehaviorMetricsCollector {
         let mut expired_count = 0;
 
         self.metrics.retain(|_ip, metrics| {
-            let has_recent = metrics.requests.iter().any(|r| {
-                now.signed_duration_since(r.timestamp).num_seconds() <= window as i64
-            });
+            let has_recent = metrics
+                .requests
+                .iter()
+                .any(|r| now.signed_duration_since(r.timestamp).num_seconds() <= window as i64);
 
             if !has_recent {
                 expired_count += 1;
@@ -271,12 +281,12 @@ impl BehaviorScoreEngine {
 
         let mut score = 0.0;
         let mut velocity_score = 0.0;
-        let mut diversity_score = 0.0;
+        let mut diversity_score: f64 = 0.0;
         let mut error_rate_score = 0.0;
         let mut factors = Vec::new();
 
         let unique_paths_count = metrics.unique_paths.len() as u64;
-        let paths_per_60s = if metrics.requests_per_minute > 0.0 {
+        let _paths_per_60s = if metrics.requests_per_minute > 0.0 {
             (unique_paths_count as f64 / metrics.requests_per_minute) * 60.0
         } else {
             0.0
@@ -321,7 +331,7 @@ impl BehaviorScoreEngine {
             ));
         }
 
-        let baseline = self.baseline_scores.get(ip).map(|e| *e).unwrap_or(0.0);
+        let baseline: f64 = self.baseline_scores.get(ip).map(|e| *e).unwrap_or(0.0);
         if score > baseline + 25.0 {
             let deviation = (score - baseline - 25.0) / 100.0;
             score += deviation * 15.0;
@@ -471,7 +481,8 @@ impl BehaviorProfileManager {
     }
 
     pub fn track_request(&self, ip: &str, url: &str, status_code: u16, user_agent: &str) {
-        self.collector.track_request(ip, url, status_code, user_agent);
+        self.collector
+            .track_request(ip, url, status_code, user_agent);
     }
 
     pub fn get_profile(&self, ip: &str) -> Option<EnrichedBehaviorProfile> {
@@ -486,9 +497,7 @@ impl BehaviorProfileManager {
         let risk_level = self.score_engine.get_risk_level(&score);
 
         Some(EnrichedBehaviorProfile::from_profile_and_score(
-            &profile,
-            &score,
-            risk_level,
+            &profile, &score, risk_level,
         ))
     }
 
@@ -502,13 +511,15 @@ impl BehaviorProfileManager {
             let risk_level = self.score_engine.get_risk_level(&score);
 
             result.push(EnrichedBehaviorProfile::from_profile_and_score(
-                &profile,
-                &score,
-                risk_level,
+                &profile, &score, risk_level,
             ));
         }
 
-        result.sort_by(|a, b| b.current_score.partial_cmp(&a.current_score).unwrap_or(std::cmp::Ordering::Equal));
+        result.sort_by(|a, b| {
+            b.current_score
+                .partial_cmp(&a.current_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         result
     }
 
@@ -630,23 +641,14 @@ mod tests {
     fn create_test_score_engine(
         collector: Arc<BehaviorMetricsCollector>,
     ) -> Arc<BehaviorScoreEngine> {
-        Arc::new(BehaviorScoreEngine::new(
-            collector,
-            70.0,
-            40.0,
-            30.0,
-        ))
+        Arc::new(BehaviorScoreEngine::new(collector, 70.0, 40.0, 30.0))
     }
 
     fn create_test_profile_manager(
         collector: Arc<BehaviorMetricsCollector>,
         score_engine: Arc<BehaviorScoreEngine>,
     ) -> BehaviorProfileManager {
-        BehaviorProfileManager::new(
-            collector,
-            score_engine,
-            BehaviorProfilingConfig::default(),
-        )
+        BehaviorProfileManager::new(collector, score_engine, BehaviorProfilingConfig::default())
     }
 
     fn simulate_requests(
@@ -675,14 +677,7 @@ mod tests {
         let paths_strings: Vec<String> = (0..50).map(|i| format!("/path{}", i)).collect();
         let paths: Vec<&str> = paths_strings.iter().map(|s| s.as_str()).collect();
 
-        simulate_requests(
-            &collector,
-            scanner_ip,
-            50,
-            &paths,
-            &[404],
-            &["scanner/1.0"],
-        );
+        simulate_requests(&collector, scanner_ip, 50, &paths, &[404], &["scanner/1.0"]);
 
         let score = score_engine.compute_score(scanner_ip);
 
@@ -692,10 +687,7 @@ mod tests {
             score.score
         );
 
-        assert!(
-            !score.factors.is_empty(),
-            "Should have identifying factors"
-        );
+        assert!(!score.factors.is_empty(), "Should have identifying factors");
 
         assert!(
             score.diversity_score > 0.0,
@@ -723,7 +715,7 @@ mod tests {
             "/api/metrics",
         ];
 
-        let admin_path_refs: Vec<&str> = admin_paths.iter().map(|s| s.as_str()).collect();
+        let admin_path_refs: Vec<&str> = admin_paths.iter().map(|&s| s).collect();
         simulate_requests(
             &collector,
             admin_ip,
@@ -770,13 +762,19 @@ mod tests {
             &collector,
             ip,
             20,
-            &suspicious_paths.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
+            &suspicious_paths
+                .iter()
+                .map(|s| s.as_ref())
+                .collect::<Vec<_>>(),
             &[200, 403, 404, 500],
             &["curl/7.68.0", "python-requests/2.28.0"],
         );
 
         let initial_score = score_engine.compute_score(ip);
-        assert!(initial_score.score > 0.0, "Should have non-zero initial score");
+        assert!(
+            initial_score.score > 0.0,
+            "Should have non-zero initial score"
+        );
 
         let mut metrics = collector.metrics.get_mut(ip).unwrap();
         let old_time = Utc::now() - Duration::minutes(45);
@@ -795,10 +793,7 @@ mod tests {
             initial_score.score
         );
 
-        assert!(
-            decayed_score.score >= 0.0,
-            "Score should not be negative"
-        );
+        assert!(decayed_score.score >= 0.0, "Score should not be negative");
 
         debug!(
             "Decay test: initial={:.1}, decayed={:.1}",
@@ -852,7 +847,10 @@ mod tests {
         );
 
         let active_profile_exists = manager.profiles.contains_key(active_ip);
-        assert!(active_profile_exists, "Active IP profile should still exist");
+        assert!(
+            active_profile_exists,
+            "Active IP profile should still exist"
+        );
     }
 
     #[test]
@@ -863,12 +861,7 @@ mod tests {
         let ip = "10.10.10.10";
 
         for i in 0..60 {
-            collector.track_request(
-                ip,
-                &format!("/api/resource/{}", i),
-                200,
-                "Mozilla/5.0",
-            );
+            collector.track_request(ip, &format!("/api/resource/{}", i), 200, "Mozilla/5.0");
         }
 
         let score = score_engine.compute_score(ip);
@@ -899,12 +892,7 @@ mod tests {
         ];
 
         for (i, ua) in user_agents.iter().enumerate() {
-            collector.track_request(
-                ip,
-                &format!("/page/{}", i),
-                200,
-                ua,
-            );
+            collector.track_request(ip, &format!("/page/{}", i), 200, ua);
         }
 
         let score = score_engine.compute_score(ip);
@@ -1116,12 +1104,7 @@ mod tests {
         let collector = Arc::new(BehaviorMetricsCollector::new(config));
 
         for i in 0..10 {
-            collector.track_request(
-                &format!("10.0.0.{}", i),
-                "/test",
-                200,
-                "Mozilla/5.0",
-            );
+            collector.track_request(&format!("10.0.0.{}", i), "/test", 200, "Mozilla/5.0");
         }
 
         assert!(

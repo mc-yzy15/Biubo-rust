@@ -288,10 +288,8 @@ async fn handle_websocket(
     permissions: Vec<String>,
     broadcaster: EventBroadcaster,
 ) {
-    let (client_id, mut event_receiver) = broadcaster.add_client(
-        "anonymous".to_string(),
-        permissions.clone(),
-    );
+    let (client_id, mut event_receiver) =
+        broadcaster.add_client("anonymous".to_string(), permissions.clone());
 
     let mut ping_interval = interval(Duration::from_secs(30));
     let mut expecting_pong = false;
@@ -309,7 +307,7 @@ async fn handle_websocket(
                     break;
                 }
 
-                if let Err(e) = socket.send(Message::Ping(vec![])).await {
+                if let Err(e) = socket.send(Message::Ping(axum::body::Bytes::from(vec![]))).await {
                     tracing::error!("Failed to send ping to {}: {}", client_addr, e);
                     break;
                 }
@@ -317,10 +315,11 @@ async fn handle_websocket(
                 pong_timeout = Some(tokio::time::sleep(Duration::from_secs(10)));
             }
             _ = async {
-                if let Some(ref mut timeout) = pong_timeout {
-                    timeout.await
+                if let Some(timeout) = pong_timeout.as_mut() {
+                    let timeout_pinned = unsafe { std::pin::Pin::new_unchecked(timeout) };
+                    timeout_pinned.await
                 } else {
-                    std::future::pending().await
+                    std::future::pending::<()>().await
                 }
             }, if expecting_pong => {
                 tracing::warn!(
@@ -384,7 +383,7 @@ async fn handle_websocket(
                         }
                     }
                     Some(Ok(Message::Ping(_))) => {
-                        if let Err(e) = socket.send(Message::Pong(vec![])).await {
+                        if let Err(e) = socket.send(Message::Pong(axum::body::Bytes::from(vec![]))).await {
                             tracing::error!("Failed to send pong to {}: {}", client_addr, e);
                             break;
                         }
@@ -424,10 +423,8 @@ mod tests {
     #[test]
     fn test_event_broadcaster_add_remove_client() {
         let broadcaster = EventBroadcaster::new();
-        let (client_id, _receiver) = broadcaster.add_client(
-            "test-key".to_string(),
-            vec!["read".to_string()],
-        );
+        let (client_id, _receiver) =
+            broadcaster.add_client("test-key".to_string(), vec!["read".to_string()]);
         assert_eq!(broadcaster.client_count(), 1);
         broadcaster.remove_client(client_id);
         assert_eq!(broadcaster.client_count(), 0);
@@ -445,7 +442,10 @@ mod tests {
         assert!(EventBroadcaster::should_receive_event(&permissions, &event));
 
         let cluster_event = WafEvent::new_cluster("node-1".to_string(), "join".to_string());
-        assert!(EventBroadcaster::should_receive_event(&permissions, &cluster_event));
+        assert!(EventBroadcaster::should_receive_event(
+            &permissions,
+            &cluster_event
+        ));
     }
 
     #[test]
@@ -457,16 +457,28 @@ mod tests {
             "high".to_string(),
             None,
         );
-        assert!(EventBroadcaster::should_receive_event(&permissions, &detection_event));
+        assert!(EventBroadcaster::should_receive_event(
+            &permissions,
+            &detection_event
+        ));
 
         let block_event = WafEvent::new_block("1.2.3.4".to_string(), "manual".to_string());
-        assert!(EventBroadcaster::should_receive_event(&permissions, &block_event));
+        assert!(EventBroadcaster::should_receive_event(
+            &permissions,
+            &block_event
+        ));
 
         let cluster_event = WafEvent::new_cluster("node-1".to_string(), "join".to_string());
-        assert!(!EventBroadcaster::should_receive_event(&permissions, &cluster_event));
+        assert!(!EventBroadcaster::should_receive_event(
+            &permissions,
+            &cluster_event
+        ));
 
         let config_event = WafEvent::new_config_change("proxy".to_string());
-        assert!(!EventBroadcaster::should_receive_event(&permissions, &config_event));
+        assert!(!EventBroadcaster::should_receive_event(
+            &permissions,
+            &config_event
+        ));
     }
 
     #[test]
@@ -478,13 +490,22 @@ mod tests {
             "high".to_string(),
             None,
         );
-        assert!(EventBroadcaster::should_receive_event(&permissions, &detection_event));
+        assert!(EventBroadcaster::should_receive_event(
+            &permissions,
+            &detection_event
+        ));
 
         let cluster_event = WafEvent::new_cluster("node-1".to_string(), "join".to_string());
-        assert!(EventBroadcaster::should_receive_event(&permissions, &cluster_event));
+        assert!(EventBroadcaster::should_receive_event(
+            &permissions,
+            &cluster_event
+        ));
 
         let config_event = WafEvent::new_config_change("proxy".to_string());
-        assert!(!EventBroadcaster::should_receive_event(&permissions, &config_event));
+        assert!(!EventBroadcaster::should_receive_event(
+            &permissions,
+            &config_event
+        ));
     }
 
     #[test]
@@ -496,13 +517,22 @@ mod tests {
             "high".to_string(),
             None,
         );
-        assert!(EventBroadcaster::should_receive_event(&permissions, &detection_event));
+        assert!(EventBroadcaster::should_receive_event(
+            &permissions,
+            &detection_event
+        ));
 
         let cluster_event = WafEvent::new_cluster("node-1".to_string(), "join".to_string());
-        assert!(EventBroadcaster::should_receive_event(&permissions, &cluster_event));
+        assert!(EventBroadcaster::should_receive_event(
+            &permissions,
+            &cluster_event
+        ));
 
         let config_event = WafEvent::new_config_change("proxy".to_string());
-        assert!(EventBroadcaster::should_receive_event(&permissions, &config_event));
+        assert!(EventBroadcaster::should_receive_event(
+            &permissions,
+            &config_event
+        ));
     }
 
     #[test]
@@ -514,7 +544,10 @@ mod tests {
             "high".to_string(),
             None,
         );
-        assert!(!EventBroadcaster::should_receive_event(&permissions, &event));
+        assert!(!EventBroadcaster::should_receive_event(
+            &permissions,
+            &event
+        ));
     }
 
     #[test]
@@ -607,20 +640,22 @@ mod tests {
             None
         )
         .is_stats_related());
-        assert!(WafEvent::new_block("1.2.3.4".to_string(), "reason".to_string()).is_stats_related());
+        assert!(
+            WafEvent::new_block("1.2.3.4".to_string(), "reason".to_string()).is_stats_related()
+        );
         assert!(WafEvent::new_unblock("1.2.3.4".to_string()).is_stats_related());
+        assert!(WafEvent::new_threat_score("1.2.3.4".to_string(), 50.0).is_stats_related());
         assert!(
-            WafEvent::new_threat_score("1.2.3.4".to_string(), 50.0).is_stats_related()
+            !WafEvent::new_cluster("node-1".to_string(), "join".to_string()).is_stats_related()
         );
-        assert!(!WafEvent::new_cluster("node-1".to_string(), "join".to_string()).is_stats_related());
-        assert!(
-            !WafEvent::new_config_change("proxy".to_string()).is_stats_related()
-        );
+        assert!(!WafEvent::new_config_change("proxy".to_string()).is_stats_related());
     }
 
     #[test]
     fn test_is_cluster_related() {
-        assert!(WafEvent::new_cluster("node-1".to_string(), "join".to_string()).is_cluster_related());
+        assert!(
+            WafEvent::new_cluster("node-1".to_string(), "join".to_string()).is_cluster_related()
+        );
         assert!(!WafEvent::new_detection(
             "1.2.3.4".to_string(),
             "sql".to_string(),

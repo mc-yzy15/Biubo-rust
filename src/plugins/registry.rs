@@ -1,5 +1,5 @@
 use crate::plugins::loader::PluginLoader;
-use crate::plugins::types::{PluginInstance, PluginStatus, PluginType};
+use crate::plugins::types::{PluginInstance, PluginType};
 use dashmap::DashMap;
 use std::path::Path;
 use std::sync::Arc;

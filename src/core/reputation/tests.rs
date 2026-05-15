@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod provider_tests {
-    use crate::core::reputation::manager::ReputationManager;
     use crate::core::models::ReputationProviderConfig;
+    use crate::core::reputation::manager::ReputationManager;
 
     #[tokio::test]
     async fn test_reputation_manager_initialization() {
@@ -130,7 +130,6 @@ mod provider_tests {
     async fn test_spamhaus_ip_reversal() {
         use crate::core::reputation::providers::SpamhausProvider;
 
-        let provider = SpamhausProvider::new(1.0);
         let ip = "192.168.1.100";
         let reversed = SpamhausProvider::reverse_ip(ip);
         assert_eq!(reversed, "100.1.168.192");
@@ -140,24 +139,57 @@ mod provider_tests {
     async fn test_greynoise_verdict_mapping() {
         use crate::core::reputation::providers::GreyNoiseProvider;
 
-        assert_eq!(GreyNoiseProvider::map_verdict_to_score("malicious"), (1.0, true));
+        assert_eq!(
+            GreyNoiseProvider::map_verdict_to_score("malicious"),
+            (1.0, true)
+        );
         assert_eq!(GreyNoiseProvider::map_verdict_to_score("bad"), (0.8, true));
-        assert_eq!(GreyNoiseProvider::map_verdict_to_score("suspicious"), (0.5, true));
-        assert_eq!(GreyNoiseProvider::map_verdict_to_score("unknown"), (0.0, false));
-        assert_eq!(GreyNoiseProvider::map_verdict_to_score("good"), (0.0, false));
-        assert_eq!(GreyNoiseProvider::map_verdict_to_score("random"), (0.0, false));
+        assert_eq!(
+            GreyNoiseProvider::map_verdict_to_score("suspicious"),
+            (0.5, true)
+        );
+        assert_eq!(
+            GreyNoiseProvider::map_verdict_to_score("unknown"),
+            (0.0, false)
+        );
+        assert_eq!(
+            GreyNoiseProvider::map_verdict_to_score("good"),
+            (0.0, false)
+        );
+        assert_eq!(
+            GreyNoiseProvider::map_verdict_to_score("random"),
+            (0.0, false)
+        );
     }
 
     #[tokio::test]
     async fn test_ipinfo_risk_score_calculation() {
         use crate::core::reputation::providers::IPInfoProvider;
 
-        assert_eq!(IPInfoProvider::calculate_risk_score(false, false, false, false), (0.0, false));
-        assert_eq!(IPInfoProvider::calculate_risk_score(true, false, false, false), (0.3, false));
-        assert_eq!(IPInfoProvider::calculate_risk_score(false, true, false, false), (0.4, false));
-        assert_eq!(IPInfoProvider::calculate_risk_score(false, false, true, false), (0.5, true));
-        assert_eq!(IPInfoProvider::calculate_risk_score(false, false, false, true), (0.8, true));
-        assert_eq!(IPInfoProvider::calculate_risk_score(true, true, true, true), (1.0, true));
+        assert_eq!(
+            IPInfoProvider::calculate_risk_score(false, false, false, false),
+            (0.0, false)
+        );
+        assert_eq!(
+            IPInfoProvider::calculate_risk_score(true, false, false, false),
+            (0.3, false)
+        );
+        assert_eq!(
+            IPInfoProvider::calculate_risk_score(false, true, false, false),
+            (0.4, false)
+        );
+        assert_eq!(
+            IPInfoProvider::calculate_risk_score(false, false, true, false),
+            (0.5, true)
+        );
+        assert_eq!(
+            IPInfoProvider::calculate_risk_score(false, false, false, true),
+            (0.8, true)
+        );
+        assert_eq!(
+            IPInfoProvider::calculate_risk_score(true, true, true, true),
+            (1.0, true)
+        );
     }
 
     #[tokio::test]
@@ -185,11 +217,7 @@ mod provider_tests {
         ];
 
         for (malicious, total, expected) in test_cases {
-            let ratio = if total > 0.0 {
-                malicious / total
-            } else {
-                0.0
-            };
+            let ratio: f64 = if total > 0.0 { malicious / total } else { 0.0 };
             assert!((ratio - expected).abs() < f64::EPSILON);
         }
     }
@@ -197,8 +225,8 @@ mod provider_tests {
 
 #[cfg(test)]
 mod mock_tests {
-    use crate::core::reputation::manager::ReputationManager;
     use crate::core::models::ReputationProviderConfig;
+    use crate::core::reputation::manager::ReputationManager;
     use mockito::Server;
 
     #[tokio::test]
@@ -210,7 +238,8 @@ mod mock_tests {
             .match_query("ipAddress=1.2.3.4")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "data": {
                     "ipAddress": "1.2.3.4",
@@ -219,7 +248,8 @@ mod mock_tests {
                     "lastReportedAt": "2024-01-01T00:00:00Z"
                 }
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -249,14 +279,16 @@ mod mock_tests {
             .mock("GET", "/v3/community/1.2.3.4")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "ip": "1.2.3.4",
                 "verdict": "malicious",
                 "noise": true,
                 "spoofable": false
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -285,7 +317,8 @@ mod mock_tests {
             .mock("GET", "/api/v3/ip_addresses/1.2.3.4")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "data": {
                     "type": "ip_address",
@@ -301,7 +334,8 @@ mod mock_tests {
                     }
                 }
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -330,7 +364,8 @@ mod mock_tests {
             .mock("GET", "/1.2.3.4/json")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "ip": "1.2.3.4",
                 "city": "Unknown",
@@ -346,7 +381,8 @@ mod mock_tests {
                     "service": ""
                 }
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -406,7 +442,8 @@ mod mock_tests {
             .match_query("ipAddress=5.6.7.8")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "data": {
                     "ipAddress": "5.6.7.8",
@@ -415,7 +452,8 @@ mod mock_tests {
                     "lastReportedAt": "2024-01-01T00:00:00Z"
                 }
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -423,14 +461,16 @@ mod mock_tests {
             .mock("GET", "/v3/community/5.6.7.8")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "ip": "5.6.7.8",
                 "verdict": "bad",
                 "noise": true,
                 "spoofable": false
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -455,8 +495,16 @@ mod mock_tests {
         assert_eq!(score.provider_results.len(), 2);
         assert!(score.score > 0.0 && score.score <= 1.0);
 
-        let abuseipdb_result = score.provider_results.iter().find(|r| r.provider_name == "AbuseIPDB").unwrap();
-        let greynoise_result = score.provider_results.iter().find(|r| r.provider_name == "GreyNoise").unwrap();
+        let abuseipdb_result = score
+            .provider_results
+            .iter()
+            .find(|r| r.provider_name == "AbuseIPDB")
+            .unwrap();
+        let greynoise_result = score
+            .provider_results
+            .iter()
+            .find(|r| r.provider_name == "GreyNoise")
+            .unwrap();
 
         assert_eq!(abuseipdb_result.score, 0.8);
         assert_eq!(greynoise_result.score, 0.8);
@@ -503,7 +551,8 @@ mod mock_tests {
             .match_query("ipAddress=8.8.8.8")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "data": {
                     "ipAddress": "8.8.8.8",
@@ -512,7 +561,8 @@ mod mock_tests {
                     "lastReportedAt": null
                 }
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -520,14 +570,16 @@ mod mock_tests {
             .mock("GET", "/v3/community/8.8.8.8")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "ip": "8.8.8.8",
                 "verdict": "good",
                 "noise": false,
                 "spoofable": false
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -535,7 +587,8 @@ mod mock_tests {
             .mock("GET", "/8.8.8.8/json")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "ip": "8.8.8.8",
                 "city": "Mountain View",
@@ -551,7 +604,8 @@ mod mock_tests {
                     "service": ""
                 }
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 

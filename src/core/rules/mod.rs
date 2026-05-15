@@ -256,10 +256,7 @@ impl RuleCompiler {
         let mut grouped: HashMap<RuleCategory, Vec<&Rule>> = HashMap::new();
 
         for rule in rules {
-            grouped
-                .entry(rule.category.clone())
-                .or_default()
-                .push(rule);
+            grouped.entry(rule.category.clone()).or_default().push(rule);
         }
 
         let mut compiled = HashMap::new();
@@ -290,11 +287,7 @@ impl RuleCompiler {
                     );
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to compile regex for category {:?}: {}",
-                        category,
-                        e
-                    );
+                    tracing::error!("Failed to compile regex for category {:?}: {}", category, e);
                 }
             }
         }
@@ -302,9 +295,7 @@ impl RuleCompiler {
         compiled
     }
 
-    pub fn compile_all_categories(
-        rules: &[Rule],
-    ) -> HashMap<RuleCategory, CompiledCategory> {
+    pub fn compile_all_categories(rules: &[Rule]) -> HashMap<RuleCategory, CompiledCategory> {
         Self::compile_rules(rules)
     }
 }
@@ -474,8 +465,8 @@ impl RuleEngine {
         loader_directories: Vec<PathBuf>,
     ) -> Self {
         let compiled = RuleCompiler::compile_rules(&rules);
-        let mut rules_map = DashMap::new();
-        let mut compiled_map = DashMap::new();
+        let rules_map = DashMap::new();
+        let compiled_map = DashMap::new();
 
         for rule in &rules {
             rules_map.insert(rule.id, rule.clone());
@@ -499,7 +490,7 @@ impl RuleEngine {
         let mut matches = Vec::new();
 
         for entry in self.compiled.iter() {
-            let category = entry.key();
+            let _category = entry.key();
             let compiled = entry.value();
 
             if let Some(mat) = compiled.regex.find(&detection_text) {
@@ -509,8 +500,7 @@ impl RuleEngine {
                 for rule_id in &compiled.rule_ids {
                     if let Some(rule_ref) = self.rules.get(rule_id) {
                         let rule = rule_ref.value().clone();
-                        self.statistics
-                            .record_hit(rule.id, rule.category.as_str());
+                        self.statistics.record_hit(rule.id, rule.category.as_str());
                         matches.push(RuleMatch {
                             rule,
                             matched_text: matched_text.clone(),
@@ -589,7 +579,7 @@ impl RuleManager {
             loader_directories.clone(),
         ));
 
-        let mut engine_map = DashMap::new();
+        let engine_map = DashMap::new();
         engine_map.insert("default".to_string(), engine);
 
         RuleManager {
@@ -618,10 +608,7 @@ impl RuleManager {
     }
 
     pub fn reload_rules(&self) -> Result<usize, String> {
-        let loader = RuleLoader::new(
-            self.loader_directories.clone(),
-            self.paranoia_level,
-        );
+        let loader = RuleLoader::new(self.loader_directories.clone(), self.paranoia_level);
 
         let rules = loader.load_rules()?;
         let rule_count = rules.len();
@@ -641,7 +628,7 @@ impl RuleManager {
 
     pub fn enable_rule(&self, rule_id: u64) -> Result<(), String> {
         let engine = self.get_engine();
-        if let Some(mut rule) = engine.rules.get_mut(&rule_id) {
+        let result = if let Some(mut rule) = engine.rules.get_mut(&rule_id) {
             rule.enabled = true;
 
             let all_rules: Vec<Rule> = engine.get_rules();
@@ -656,12 +643,13 @@ impl RuleManager {
             Ok(())
         } else {
             Err(format!("Rule with id {} not found", rule_id))
-        }
+        };
+        result
     }
 
     pub fn disable_rule(&self, rule_id: u64) -> Result<(), String> {
         let engine = self.get_engine();
-        if let Some(mut rule) = engine.rules.get_mut(&rule_id) {
+        let result = if let Some(mut rule) = engine.rules.get_mut(&rule_id) {
             rule.enabled = false;
 
             let all_rules: Vec<Rule> = engine.get_rules();
@@ -676,7 +664,8 @@ impl RuleManager {
             Ok(())
         } else {
             Err(format!("Rule with id {} not found", rule_id))
-        }
+        };
+        result
     }
 
     pub fn enable_category(&self, category: &RuleCategory) -> Result<(), String> {
@@ -769,7 +758,12 @@ impl RuleManager {
 mod tests {
     use super::*;
 
-    fn create_test_rule(id: u64, category: RuleCategory, pattern: &str, paranoia_level: u8) -> Rule {
+    fn create_test_rule(
+        id: u64,
+        category: RuleCategory,
+        pattern: &str,
+        paranoia_level: u8,
+    ) -> Rule {
         Rule {
             id,
             category,
@@ -837,7 +831,9 @@ mod tests {
 
         let sqli_compiled = compiled.get(&RuleCategory::SqlInjection).unwrap();
         assert_eq!(sqli_compiled.rule_ids.len(), 1);
-        assert!(sqli_compiled.regex.is_match("id=1 union select * from users"));
+        assert!(sqli_compiled
+            .regex
+            .is_match("id=1 union select * from users"));
     }
 
     #[test]
@@ -947,7 +943,12 @@ mod tests {
     #[test]
     fn test_rule_engine_sql_injection_detection() {
         let rules = vec![
-            create_test_rule(10, RuleCategory::SqlInjection, r#"union\s+(all\s+)?select"#, 1),
+            create_test_rule(
+                10,
+                RuleCategory::SqlInjection,
+                r#"union\s+(all\s+)?select"#,
+                1,
+            ),
             create_test_rule(11, RuleCategory::SqlInjection, r#"or\s+1\s*=\s*1"#, 1),
         ];
 
@@ -966,7 +967,9 @@ mod tests {
         let matches = engine.match_request(&request);
         assert!(!matches.is_empty());
 
-        let has_sqli = matches.iter().any(|m| m.rule.category == RuleCategory::SqlInjection);
+        let has_sqli = matches
+            .iter()
+            .any(|m| m.rule.category == RuleCategory::SqlInjection);
         assert!(has_sqli);
     }
 
@@ -1265,7 +1268,9 @@ mod tests {
 
         let matches = engine.match_request(&ssti_request);
         assert!(!matches.is_empty());
-        assert!(matches.iter().any(|m| m.rule.category == RuleCategory::Ssti));
+        assert!(matches
+            .iter()
+            .any(|m| m.rule.category == RuleCategory::Ssti));
     }
 
     #[test]
@@ -1316,7 +1321,9 @@ mod tests {
 
         let matches = engine.match_request(&scanner_request);
         assert!(!matches.is_empty());
-        assert!(matches.iter().any(|m| m.rule.category == RuleCategory::Scanner));
+        assert!(matches
+            .iter()
+            .any(|m| m.rule.category == RuleCategory::Scanner));
     }
 
     #[test]
@@ -1342,7 +1349,9 @@ mod tests {
         assert!(!matches.is_empty());
 
         let has_xss = matches.iter().any(|m| m.rule.category == RuleCategory::Xss);
-        let has_sqli = matches.iter().any(|m| m.rule.category == RuleCategory::SqlInjection);
+        let has_sqli = matches
+            .iter()
+            .any(|m| m.rule.category == RuleCategory::SqlInjection);
         assert!(has_xss);
         assert!(has_sqli);
     }

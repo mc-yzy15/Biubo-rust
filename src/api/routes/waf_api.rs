@@ -679,6 +679,7 @@ mod tests {
             settings: Arc::new(RwLock::new(settings)),
             error_pages: std::collections::HashMap::new(),
             async_detection_queue: None,
+            event_broadcaster: crate::api::routes::waf_events::EventBroadcaster::new(),
         }
     }
 
@@ -793,21 +794,21 @@ mod tests {
 
     #[test]
     fn test_threat_multiplier_sql_injection() {
-        let behavior = 50.0;
-        let adjusted = (behavior * 1.5).min(100.0);
+        let behavior: f64 = 50.0;
+        let adjusted: f64 = (behavior * 1.5).min(100.0);
         assert_eq!(adjusted, 75.0);
     }
 
     #[test]
     fn test_threat_multiplier_ddos() {
-        let behavior = 50.0;
-        let adjusted = (behavior * 1.8).min(100.0);
+        let behavior: f64 = 50.0;
+        let adjusted: f64 = (behavior * 1.8).min(100.0);
         assert_eq!(adjusted, 90.0);
     }
 
     #[test]
     fn test_threat_multiplier_capped_at_100() {
-        let behavior = 80.0;
+        let behavior: f64 = 80.0;
         let adjusted = (behavior * 1.8).min(100.0);
         assert_eq!(adjusted, 100.0);
     }

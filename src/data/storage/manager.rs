@@ -143,6 +143,7 @@ impl ProxyDB {
     }
 
     pub fn write_log(&self, entry: serde_json::Value) {
+        let entry_for_exporter = entry.clone();
         let should_export = {
             let _guard = self.lock.lock();
             let _ = self.ensure_log_db();
@@ -179,9 +180,8 @@ impl ProxyDB {
         };
 
         if should_export {
-            let entry_clone = entry;
             tokio::spawn(async move {
-                crate::plugins::trigger_exporters(entry_clone).await;
+                crate::plugins::trigger_exporters(entry_for_exporter).await;
             });
         }
     }

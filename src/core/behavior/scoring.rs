@@ -81,7 +81,7 @@ impl ScoreDecay {
             return current_score.max(SCORE_DECAY_MINIMUM);
         }
 
-        let decay_factor = (-elapsed_minutes / SCORE_DECAY_TIME_CONSTANT).exp();
+        let decay_factor: f64 = (-elapsed_minutes / SCORE_DECAY_TIME_CONSTANT).exp();
         let decayed_score = current_score * decay_factor;
 
         decayed_score.max(SCORE_DECAY_MINIMUM)
@@ -97,11 +97,14 @@ impl BehaviorScoreCalculator {
         let error_rate = Self::calculate_error_rate(profile);
 
         let velocity_score = ThresholdChecker::check_velocity(requests_per_min);
-        let path_diversity_score = ThresholdChecker::check_path_diversity(unique_paths_count, error_rate);
+        let path_diversity_score =
+            ThresholdChecker::check_path_diversity(unique_paths_count, error_rate);
         let error_rate_score = ThresholdChecker::check_error_rate(error_rate);
-        let session_consistency_score = ThresholdChecker::check_session_consistency(&profile.user_agents);
+        let session_consistency_score =
+            ThresholdChecker::check_session_consistency(&profile.user_agents);
 
-        let raw_score = velocity_score + path_diversity_score + error_rate_score + session_consistency_score;
+        let raw_score =
+            velocity_score + path_diversity_score + error_rate_score + session_consistency_score;
 
         let decayed_score = Self::apply_decay_if_needed(profile, raw_score);
 
@@ -179,7 +182,10 @@ impl BehaviorScoreCalculator {
         let mut factors = Vec::new();
 
         if velocity_score > 0.0 {
-            factors.push(format!("High request velocity: {:.1} requests/minute", requests_per_min));
+            factors.push(format!(
+                "High request velocity: {:.1} requests/minute",
+                requests_per_min
+            ));
         }
 
         if path_diversity_score > 0.0 {
@@ -199,7 +205,10 @@ impl BehaviorScoreCalculator {
 
         let unique_ua: HashSet<&str> = user_agents.iter().map(|s| s.as_str()).collect();
         if session_consistency_score > 0.0 {
-            factors.push(format!("Multiple user agents detected ({})", unique_ua.len()));
+            factors.push(format!(
+                "Multiple user agents detected ({})",
+                unique_ua.len()
+            ));
         }
 
         factors
@@ -314,10 +323,7 @@ mod tests {
 
     #[test]
     fn test_session_consistency_few_agents() {
-        let agents = vec![
-            "Mozilla/5.0".to_string(),
-            "curl/7.68.0".to_string(),
-        ];
+        let agents = vec!["Mozilla/5.0".to_string(), "curl/7.68.0".to_string()];
         assert_eq!(ThresholdChecker::check_session_consistency(&agents), 15.0);
     }
 
@@ -351,26 +357,42 @@ mod tests {
     #[test]
     fn test_score_decay_half_life() {
         let decayed = ScoreDecay::decay_score(80.0, 30.0);
-        assert!((decayed - 29.4).abs() < 1.0, "Expected ~29.4, got {}", decayed);
+        assert!(
+            (decayed - 29.4).abs() < 1.0,
+            "Expected ~29.4, got {}",
+            decayed
+        );
     }
 
     #[test]
     fn test_score_decay_one_hour() {
         let decayed = ScoreDecay::decay_score(100.0, 60.0);
-        let expected = 100.0 * (-60.0 / 30.0).exp();
-        assert!((decayed - expected).abs() < 0.01, "Expected {}, got {}", expected, decayed);
+        let expected: f64 = 100.0_f64 * (-60.0_f64 / 30.0_f64).exp();
+        assert!(
+            (decayed - expected).abs() < 0.01,
+            "Expected {}, got {}",
+            expected,
+            decayed
+        );
     }
 
     #[test]
     fn test_score_decay_minimum() {
         let decayed = ScoreDecay::decay_score(50.0, 300.0);
-        assert!(decayed >= 0.0, "Score must not be negative, got {}", decayed);
+        assert!(
+            decayed >= 0.0,
+            "Score must not be negative, got {}",
+            decayed
+        );
     }
 
     #[test]
     fn test_score_decay_negative_elapsed() {
         let decayed = ScoreDecay::decay_score(80.0, -10.0);
-        assert_eq!(decayed, 80.0, "Negative elapsed should return current score");
+        assert_eq!(
+            decayed, 80.0,
+            "Negative elapsed should return current score"
+        );
     }
 
     fn create_test_profile(
@@ -451,12 +473,7 @@ mod tests {
             120,
             paths.iter().map(|s| s.as_str()).collect(),
             84,
-            vec![
-                "bot/1.0",
-                "bot/2.0",
-                "scanner/1.0",
-                "exploit/3.0",
-            ],
+            vec!["bot/1.0", "bot/2.0", "scanner/1.0", "exploit/3.0"],
             60,
         );
 
@@ -473,14 +490,11 @@ mod tests {
     fn test_behavior_score_breakdown() {
         let profile = create_test_profile(
             120,
-            vec!["/a", "/b", "/c", "/d", "/e", "/f", "/g", "/h", "/i", "/j", "/k"],
-            84,
             vec![
-                "bot/1.0",
-                "bot/2.0",
-                "scanner/1.0",
-                "exploit/3.0",
+                "/a", "/b", "/c", "/d", "/e", "/f", "/g", "/h", "/i", "/j", "/k",
             ],
+            84,
+            vec!["bot/1.0", "bot/2.0", "scanner/1.0", "exploit/3.0"],
             60,
         );
 
@@ -518,13 +532,7 @@ mod tests {
 
     #[test]
     fn test_clean_traffic_no_factors() {
-        let profile = create_test_profile(
-            5,
-            vec!["/home", "/about"],
-            0,
-            vec!["Mozilla/5.0"],
-            60,
-        );
+        let profile = create_test_profile(5, vec!["/home", "/about"], 0, vec!["Mozilla/5.0"], 60);
 
         let score = BehaviorScoreCalculator::compute_score(&profile);
 
@@ -566,13 +574,7 @@ mod tests {
 
     #[test]
     fn test_zero_requests_profile() {
-        let profile = create_test_profile(
-            0,
-            vec![],
-            0,
-            vec![],
-            60,
-        );
+        let profile = create_test_profile(0, vec![], 0, vec![], 60);
 
         let score = BehaviorScoreCalculator::compute_score(&profile);
 

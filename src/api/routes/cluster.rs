@@ -1,11 +1,11 @@
 use crate::cluster::sync::{ConfigSync, ConfigUpdate};
 use crate::cluster::threat_share::ThreatIntelligenceShare;
-use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Extension;
+use axum::Router;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -31,7 +31,6 @@ async fn receive_config_sync(
     Extension(config_sync): Extension<Arc<ConfigSync>>,
     body: axum::body::Bytes,
 ) -> Response {
-
     let update: ConfigUpdate = match serde_json::from_slice(&body) {
         Ok(u) => u,
         Err(e) => {
@@ -128,7 +127,7 @@ async fn cluster_health(
     let uptime = config_sync.manager.get_uptime_seconds();
 
     let active_nodes = config_sync.manager.get_active_nodes();
-    let dead_nodes: Vec<_> = config_sync.manager.detect_dead_nodes();
+    let dead_nodes: Vec<_> = config_sync.manager.list_dead_nodes();
 
     let blocked_ip_count = threat_share.get_blocked_ip_count();
     let event_count = threat_share.get_event_count();
@@ -178,27 +177,10 @@ async fn cluster_nodes(
     Extension(config_sync): Extension<Arc<ConfigSync>>,
 ) -> Response {
     let active_nodes = config_sync.manager.get_active_nodes();
-    let dead_nodes = config_sync.manager.detect_dead_nodes();
+    let dead_nodes = config_sync.manager.list_dead_nodes();
     let primary_node = config_sync.manager.get_primary_node();
 
-    let all_nodes: Vec<_> = config_sync.manager.nodes
-        .iter()
-        .map(|entry| {
-            let node = &entry.value().node;
-            let is_dead = dead_nodes.contains(&node.id);
-            let is_primary = primary_node.as_ref() == Some(&node.id);
-
-            json!({
-                "id": node.id,
-                "role": node.role.to_string(),
-                "ip": node.ip,
-                "status": if is_dead { "dead" } else { &node.status },
-                "is_primary": is_primary,
-                "last_heartbeat": node.last_heartbeat,
-                "uptime_seconds": node.uptime_seconds,
-            })
-        })
-        .collect();
+    let all_nodes = config_sync.manager.get_all_nodes_info(&dead_nodes, &primary_node);
 
     (
         StatusCode::OK,
@@ -222,7 +204,9 @@ async fn cluster_sync_status(
     let pending_acks = config_sync.get_pending_ack_count();
     let acknowledged = config_sync.get_acknowledged_count();
 
-    let node_sync_status: Vec<_> = config_sync.manager.get_active_nodes()
+    let node_sync_status: Vec<_> = config_sync
+        .manager
+        .get_active_nodes()
         .iter()
         .filter(|node| node.id != node_id)
         .map(|node| {
@@ -241,15 +225,17 @@ async fn cluster_sync_status(
 
     let event_log: Vec<_> = recent_events
         .iter()
-        .map(|e| json!({
-            "id": e.id,
-            "ip": e.ip,
-            "attack_type": e.attack_type,
-            "severity": e.severity,
-            "timestamp": e.timestamp,
-            "source_node_id": e.source_node_id,
-            "correlation_id": e.correlation_id,
-        }))
+        .map(|e| {
+            json!({
+                "id": e.id,
+                "ip": e.ip,
+                "attack_type": e.attack_type,
+                "severity": e.severity,
+                "timestamp": e.timestamp,
+                "source_node_id": e.source_node_id,
+                "correlation_id": e.correlation_id,
+            })
+        })
         .collect();
 
     (

@@ -87,15 +87,12 @@ pub async fn detection_worker(
                     .await;
 
                     let result = AsyncDetectionResult {
-                        request_id,
+                        request_id: request_id.clone(),
                         detection,
                         timestamp: chrono::Utc::now(),
                     };
 
-                    tracing::debug!(
-                        "Async detection completed for request: {}",
-                        result.request_id
-                    );
+                    tracing::debug!("Async detection completed for request: {}", request_id);
 
                     results_clone.insert(result.request_id.clone(), result);
                 });
@@ -150,14 +147,14 @@ pub fn start_async_detection_workers(
                             .await;
 
                             let result = AsyncDetectionResult {
-                                request_id,
+                                request_id: request_id.clone(),
                                 detection,
                                 timestamp: chrono::Utc::now(),
                             };
 
                             tracing::debug!(
                                 "Async detection completed for request: {}",
-                                result.request_id
+                                request_id
                             );
 
                             results_clone.insert(result.request_id.clone(), result);

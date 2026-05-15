@@ -27,6 +27,7 @@ impl ExporterQueue {
     }
 }
 
+#[derive(Clone)]
 struct ExportTarget {
     config: LogExporterConfig,
     client: reqwest::Client,

@@ -92,7 +92,9 @@ impl ClusterManager {
             uptime_seconds: 0,
         };
 
-        manager.nodes.insert(manager.node_id.clone(), InternalNode::new(self_node));
+        manager
+            .nodes
+            .insert(manager.node_id.clone(), InternalNode::new(self_node));
 
         manager
     }
@@ -102,15 +104,21 @@ impl ClusterManager {
             return false;
         }
 
-        let existing = self.nodes.get(&node.id);
-        if let Some(entry) = existing {
-            let mut internal = entry.value_mut();
+        let existing = self.nodes.get_mut(&node.id);
+        if let Some(mut entry) = existing {
+            let internal = entry.value_mut();
             internal.node = node.clone();
             internal.last_heartbeat = Utc::now();
             tracing::info!("Updated existing node: {} ({})", node.id, node.role);
         } else {
-            self.nodes.insert(node.id.clone(), InternalNode::new(node.clone()));
-            tracing::info!("Registered new node: {} ({}) at {}", node.id, node.role, node.ip);
+            self.nodes
+                .insert(node.id.clone(), InternalNode::new(node.clone()));
+            tracing::info!(
+                "Registered new node: {} ({}) at {}",
+                node.id,
+                node.role,
+                node.ip
+            );
         }
 
         true
@@ -164,7 +172,9 @@ impl ClusterManager {
 
         if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
             socket.set_broadcast(true).ok();
-            socket.set_read_timeout(Some(std::time::Duration::from_millis(500))).ok();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                .ok();
 
             let discovery_msg = format!(
                 "{}:{}:{}",
@@ -174,7 +184,9 @@ impl ClusterManager {
             );
 
             let broadcast_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), DISCOVERY_PORT);
-            socket.send_to(discovery_msg.as_bytes(), broadcast_addr).ok();
+            socket
+                .send_to(discovery_msg.as_bytes(), broadcast_addr)
+                .ok();
 
             let mut buf = [0u8; 1024];
             while let Ok((len, addr)) = socket.recv_from(&mut buf) {
@@ -244,7 +256,9 @@ impl ClusterManager {
             );
 
             let broadcast_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), DISCOVERY_PORT);
-            socket.send_to(heartbeat_msg.as_bytes(), broadcast_addr).ok();
+            socket
+                .send_to(heartbeat_msg.as_bytes(), broadcast_addr)
+                .ok();
         }
     }
 
@@ -265,23 +279,8 @@ impl ClusterManager {
         self.register_node(node);
     }
 
-    pub fn detect_dead_nodes(&self) -> Vec<String> {
-        let now = Utc::now();
-        let mut dead_nodes = Vec::new();
-
-        for entry in self.nodes.iter() {
-            let node_id = entry.key();
-            let internal_node = entry.value();
-
-            if *node_id == self.node_id {
-                continue;
-            }
-
-            let elapsed = now.signed_duration_since(internal_node.last_heartbeat);
-            if elapsed.num_seconds() > DEAD_NODE_THRESHOLD_SECS as i64 {
-                dead_nodes.push(node_id.clone());
-            }
-        }
+    pub fn detect_dead_nodes(&mut self) -> Vec<String> {
+        let dead_nodes = self.list_dead_nodes();
 
         for node_id in &dead_nodes {
             tracing::warn!("Dead node detected: {}", node_id);
@@ -300,7 +299,28 @@ impl ClusterManager {
         dead_nodes
     }
 
-    pub fn elect_primary(&self) -> Option<String> {
+    pub fn list_dead_nodes(&self) -> Vec<String> {
+        let now = Utc::now();
+        let mut dead_nodes = Vec::new();
+
+        for entry in self.nodes.iter() {
+            let node_id = entry.key();
+            let internal_node = entry.value();
+
+            if *node_id == self.node_id {
+                continue;
+            }
+
+            let elapsed = now.signed_duration_since(internal_node.last_heartbeat);
+            if elapsed.num_seconds() > DEAD_NODE_THRESHOLD_SECS as i64 {
+                dead_nodes.push(node_id.clone());
+            }
+        }
+
+        dead_nodes
+    }
+
+    pub fn elect_primary(&mut self) -> Option<String> {
         let mut candidates: Vec<(String, u64)> = Vec::new();
 
         for entry in self.nodes.iter() {
@@ -311,7 +331,10 @@ impl ClusterManager {
                 continue;
             }
 
-            if matches!(internal_node.node.role, ClusterRole::Primary | ClusterRole::Secondary) {
+            if matches!(
+                internal_node.node.role,
+                ClusterRole::Primary | ClusterRole::Secondary
+            ) {
                 candidates.push((node_id.clone(), internal_node.node.uptime_seconds));
             }
         }
@@ -325,7 +348,11 @@ impl ClusterManager {
         candidates.sort_by(|a, b| b.1.cmp(&a.1));
 
         if let Some((primary_id, _)) = candidates.first() {
-            tracing::info!("Primary node elected: {} (uptime: {}s)", primary_id, candidates.first().unwrap().1);
+            tracing::info!(
+                "Primary node elected: {} (uptime: {}s)",
+                primary_id,
+                candidates.first().unwrap().1
+            );
 
             if *primary_id == self.node_id {
                 let mut role_guard = self.settings.write();
@@ -368,7 +395,7 @@ impl ClusterManager {
         false
     }
 
-    pub fn promote_secondary(&self) -> Option<String> {
+    pub fn promote_secondary(&mut self) -> Option<String> {
         let mut candidates: Vec<(String, u64)> = Vec::new();
 
         for entry in self.nodes.iter() {
@@ -411,7 +438,9 @@ impl ClusterManager {
 
     pub fn get_primary_node(&self) -> Option<String> {
         for entry in self.nodes.iter() {
-            if matches!(entry.value().node.role, ClusterRole::Primary) && entry.value().node.status == "online" {
+            if matches!(entry.value().node.role, ClusterRole::Primary)
+                && entry.value().node.status == "online"
+            {
                 return Some(entry.key().clone());
             }
         }
@@ -427,6 +456,31 @@ impl ClusterManager {
             .iter()
             .filter(|e| e.value().node.status == "online")
             .map(|e| e.value().node.clone())
+            .collect()
+    }
+
+    pub fn get_all_nodes_info(
+        &self,
+        dead_nodes: &[String],
+        primary_node: &Option<String>,
+    ) -> Vec<serde_json::Value> {
+        self.nodes
+            .iter()
+            .map(|entry| {
+                let node = &entry.value().node;
+                let is_dead = dead_nodes.contains(&node.id);
+                let is_primary = primary_node.as_ref() == Some(&node.id);
+
+                serde_json::json!({
+                    "id": node.id,
+                    "role": node.role.to_string(),
+                    "ip": node.ip,
+                    "status": if is_dead { "dead" } else { &node.status },
+                    "is_primary": is_primary,
+                    "last_heartbeat": node.last_heartbeat,
+                    "uptime_seconds": node.uptime_seconds,
+                })
+            })
             .collect()
     }
 
@@ -448,29 +502,28 @@ impl ClusterManager {
     }
 
     pub async fn start_dead_node_detector(&self) {
-        let manager = Arc::new(self.clone_for_worker());
-        let manager_ref = manager.clone();
+        let manager = parking_lot::Mutex::new(self.clone_for_worker());
 
         tokio::spawn(async move {
             let mut interval_timer = interval(Duration::from_secs(5));
             loop {
                 interval_timer.tick().await;
 
-                let dead_nodes = manager_ref.detect_dead_nodes();
+                let dead_nodes = manager.lock().detect_dead_nodes();
                 for node_id in &dead_nodes {
-                    let current_primary = manager_ref.get_primary_node();
+                    let current_primary = manager.lock().get_primary_node();
                     if current_primary == Some(node_id.clone()) {
-                        manager_ref.demote_primary(node_id.clone());
+                        manager.lock().demote_primary(node_id.clone());
                         tracing::warn!("Primary node {} is dead, triggering election", node_id);
 
-                        if let Some(new_primary) = manager_ref.promote_secondary() {
+                        if let Some(new_primary) = manager.lock().promote_secondary() {
                             tracing::info!("New primary elected: {}", new_primary);
                         } else {
-                            manager_ref.elect_primary();
+                            manager.lock().elect_primary();
                         }
                     }
 
-                    manager_ref.unregister_node(node_id.clone());
+                    manager.lock().unregister_node(node_id.clone());
                 }
             }
         });
@@ -518,7 +571,6 @@ impl ClusterManager {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use tokio::time::{sleep, Duration};
 
     fn create_test_settings() -> SharedSettings {
         use crate::config::settings::Settings;
@@ -567,9 +619,9 @@ mod tests {
     #[tokio::test]
     async fn test_heartbeat_and_dead_node_detection() {
         let settings = create_test_settings();
-        let manager = ClusterManager::new(settings);
+        let mut manager = ClusterManager::new(settings);
 
-        let mut old_node = ClusterNode {
+        let old_node = ClusterNode {
             id: "old-node".to_string(),
             role: ClusterRole::Worker,
             ip: "192.168.1.200".to_string(),
@@ -582,7 +634,7 @@ mod tests {
         let dead_nodes = manager.detect_dead_nodes();
         assert!(dead_nodes.contains(&"old-node".to_string()));
 
-        let mut fresh_node = ClusterNode {
+        let fresh_node = ClusterNode {
             id: "fresh-node".to_string(),
             role: ClusterRole::Worker,
             ip: "192.168.1.201".to_string(),
@@ -600,7 +652,7 @@ mod tests {
     #[tokio::test]
     async fn test_primary_election() {
         let settings = create_test_settings();
-        let manager = ClusterManager::new(settings);
+        let mut manager = ClusterManager::new(settings);
 
         let primary_candidate = ClusterNode {
             id: "candidate-1".to_string(),
@@ -641,7 +693,7 @@ mod tests {
     #[tokio::test]
     async fn test_primary_failover() {
         let settings = create_test_settings();
-        let manager = ClusterManager::new(settings);
+        let mut manager = ClusterManager::new(settings);
 
         let primary = ClusterNode {
             id: "primary-node".to_string(),
@@ -684,7 +736,7 @@ mod tests {
     #[tokio::test]
     async fn test_automatic_failover_on_dead_primary() {
         let settings = create_test_settings();
-        let manager = ClusterManager::new(settings);
+        let mut manager = ClusterManager::new(settings);
 
         let primary = ClusterNode {
             id: "dead-primary".to_string(),
@@ -775,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn test_cluster_status_transitions() {
         let settings = create_test_settings();
-        let manager = ClusterManager::new(settings);
+        let mut manager = ClusterManager::new(settings);
 
         assert!(matches!(manager.get_status(), ClusterStatus::Initializing));
 

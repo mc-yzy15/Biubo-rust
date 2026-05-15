@@ -28,24 +28,26 @@ pub async fn api_key_auth_middleware(
         }
     };
 
-    let settings = state.settings.read();
-    let waf_api_key = settings.waf_api_keys.iter().find(|k| k.key == api_key);
-    
-    let waf_api_key = match waf_api_key {
-        Some(key) => key,
-        None => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({
-                    "status": "error",
-                    "message": "Invalid API key."
-                })),
-            )
-                .into_response();
+    let (is_active, _permissions) = {
+        let settings = state.settings.read();
+        let waf_api_key = settings.waf_api_keys.iter().find(|k| k.key == api_key);
+        
+        match waf_api_key {
+            Some(key) => (key.is_active, key.permissions.clone()),
+            None => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "status": "error",
+                        "message": "Invalid API key."
+                    })),
+                )
+                    .into_response();
+            }
         }
     };
 
-    if !waf_api_key.is_active {
+    if !is_active {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({

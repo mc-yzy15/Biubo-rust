@@ -82,7 +82,10 @@ impl ThreatIntelligenceShare {
                     true
                 }
                 Err(e) => {
-                    tracing::warn!("[ThreatShare] Failed to connect to Redis for threat sharing: {}", e);
+                    tracing::warn!(
+                        "[ThreatShare] Failed to connect to Redis for threat sharing: {}",
+                        e
+                    );
                     false
                 }
             },
@@ -104,16 +107,21 @@ impl ThreatIntelligenceShare {
 
         self.log_threat_event(event.clone());
 
-        self.local_blocklist.insert(event.ip.clone(), BlockedIPEntry {
-            ip: event.ip.clone(),
-            attack_type: event.attack_type.clone(),
-            blocked_at: Utc::now(),
-            expires_at: Utc::now() + chrono::Duration::seconds(IP_BLOCKLIST_TTL_SECS as i64),
-            source_node_id: event.source_node_id.clone(),
-            event_id: event.id.clone(),
-        });
+        self.local_blocklist.insert(
+            event.ip.clone(),
+            BlockedIPEntry {
+                ip: event.ip.clone(),
+                attack_type: event.attack_type.clone(),
+                blocked_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::seconds(IP_BLOCKLIST_TTL_SECS as i64),
+                source_node_id: event.source_node_id.clone(),
+                event_id: event.id.clone(),
+            },
+        );
 
-        let target_nodes = self.manager.get_active_nodes()
+        let target_nodes = self
+            .manager
+            .get_active_nodes()
             .into_iter()
             .filter(|node| node.id != self.manager.node_id)
             .collect::<Vec<_>>();
@@ -126,15 +134,24 @@ impl ThreatIntelligenceShare {
         if self.redis_client.is_some() {
             match self.broadcast_via_redis(event).await {
                 Ok(_) => {
-                    tracing::info!("[ThreatShare] Threat event broadcast via Redis to {} nodes", target_nodes.len());
+                    tracing::info!(
+                        "[ThreatShare] Threat event broadcast via Redis to {} nodes",
+                        target_nodes.len()
+                    );
                 }
                 Err(e) => {
-                    tracing::warn!("[ThreatShare] Redis broadcast failed, falling back to HTTP: {}", e);
+                    tracing::warn!(
+                        "[ThreatShare] Redis broadcast failed, falling back to HTTP: {}",
+                        e
+                    );
                     self.broadcast_via_http(event, &target_nodes).await;
                 }
             }
         } else {
-            tracing::info!("[ThreatShare] Broadcasting threat event via HTTP to {} nodes", target_nodes.len());
+            tracing::info!(
+                "[ThreatShare] Broadcasting threat event via HTTP to {} nodes",
+                target_nodes.len()
+            );
             self.broadcast_via_http(event, &target_nodes).await;
         }
 
@@ -142,7 +159,8 @@ impl ThreatIntelligenceShare {
     }
 
     async fn broadcast_via_redis(&self, event: &ThreatEvent) -> Result<(), String> {
-        let redis_client = self.redis_client
+        let redis_client = self
+            .redis_client
             .as_ref()
             .ok_or_else(|| "Redis client not available".to_string())?;
 
@@ -160,17 +178,25 @@ impl ThreatIntelligenceShare {
         Ok(())
     }
 
-    async fn broadcast_via_http(&self, event: &ThreatEvent, nodes: &[crate::core::models::ClusterNode]) {
+    async fn broadcast_via_http(
+        &self,
+        event: &ThreatEvent,
+        nodes: &[crate::core::models::ClusterNode],
+    ) {
         let message = match serde_json::to_string(event) {
             Ok(m) => m,
             Err(e) => {
-                tracing::error!("[ThreatShare] Failed to serialize threat event for HTTP: {}", e);
+                tracing::error!(
+                    "[ThreatShare] Failed to serialize threat event for HTTP: {}",
+                    e
+                );
                 return;
             }
         };
 
         for node in nodes {
             let node_ip = node.ip.clone();
+            let node_id = node.id.clone();
             let msg = message.clone();
             let client = self.http_client.clone();
 
@@ -179,24 +205,28 @@ impl ThreatIntelligenceShare {
                 match client
                     .post(&url)
                     .header("Content-Type", "application/json")
-                    .header("X-Cluster-Node-Id", &node.id)
+                    .header("X-Cluster-Node-Id", &node_id)
                     .body(msg)
                     .send()
                     .await
                 {
                     Ok(resp) => {
                         if resp.status().is_success() {
-                            tracing::info!("[ThreatShare] Threat event sent to node {}", node.id);
+                            tracing::info!("[ThreatShare] Threat event sent to node {}", node_id);
                         } else {
                             tracing::warn!(
                                 "[ThreatShare] HTTP threat share failed for node {}: status {}",
-                                node.id,
+                                node_id,
                                 resp.status()
                             );
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("[ThreatShare] HTTP threat share error for node {}: {}", node.id, e);
+                        tracing::warn!(
+                            "[ThreatShare] HTTP threat share error for node {}: {}",
+                            node_id,
+                            e
+                        );
                     }
                 }
             });
@@ -214,14 +244,17 @@ impl ThreatIntelligenceShare {
 
         self.log_threat_event(event.clone());
 
-        self.local_blocklist.insert(event.ip.clone(), BlockedIPEntry {
-            ip: event.ip.clone(),
-            attack_type: event.attack_type.clone(),
-            blocked_at: Utc::now(),
-            expires_at: Utc::now() + chrono::Duration::seconds(IP_BLOCKLIST_TTL_SECS as i64),
-            source_node_id: event.source_node_id.clone(),
-            event_id: event.id.clone(),
-        });
+        self.local_blocklist.insert(
+            event.ip.clone(),
+            BlockedIPEntry {
+                ip: event.ip.clone(),
+                attack_type: event.attack_type.clone(),
+                blocked_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::seconds(IP_BLOCKLIST_TTL_SECS as i64),
+                source_node_id: event.source_node_id.clone(),
+                event_id: event.id.clone(),
+            },
+        );
 
         tracing::info!(
             "[ThreatShare] IP {} added to local blocklist from threat event {}",
@@ -283,10 +316,8 @@ impl ThreatIntelligenceShare {
             self.manager.node_id.clone(),
         );
 
-        let config_sync = crate::cluster::sync::ConfigSync::new(
-            self.manager.clone(),
-            self.settings.clone(),
-        );
+        let config_sync =
+            crate::cluster::sync::ConfigSync::new(self.manager.clone(), self.settings.clone());
 
         let acked_count = config_sync.broadcast_config_change(update).await?;
 
@@ -305,7 +336,8 @@ impl ThreatIntelligenceShare {
 
     fn log_threat_event(&self, event: ThreatEvent) {
         if self.event_log.len() >= MAX_THREAT_EVENTS {
-            let keys: Vec<String> = self.event_log
+            let keys: Vec<String> = self
+                .event_log
                 .iter()
                 .take(MAX_THREAT_EVENTS / 2)
                 .map(|e| e.key().clone())
@@ -320,10 +352,8 @@ impl ThreatIntelligenceShare {
     }
 
     pub fn get_recent_events(&self, limit: usize) -> Vec<ThreatEvent> {
-        let mut events: Vec<ThreatEvent> = self.event_log
-            .iter()
-            .map(|e| e.value().clone())
-            .collect();
+        let mut events: Vec<ThreatEvent> =
+            self.event_log.iter().map(|e| e.value().clone()).collect();
 
         events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
@@ -490,7 +520,7 @@ mod tests {
         share.receive_threat_event(&event);
         assert!(share.is_ip_blocked("10.0.0.100"));
 
-        let entry = share.local_blocklist.get_mut("10.0.0.100").unwrap();
+        let mut entry = share.local_blocklist.get_mut("10.0.0.100").unwrap();
         entry.value_mut().expires_at = Utc::now() - chrono::Duration::seconds(100);
         drop(entry);
 
@@ -530,7 +560,7 @@ mod tests {
         );
         share.receive_threat_event(&event1);
 
-        let entry = share.local_blocklist.get_mut("10.0.0.200").unwrap();
+        let mut entry = share.local_blocklist.get_mut("10.0.0.200").unwrap();
         entry.value_mut().expires_at = Utc::now() - chrono::Duration::seconds(100);
         drop(entry);
 
