@@ -398,9 +398,9 @@ jobs:
           curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
             | tar xJ -C /opt
           ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
-          printf '#!/bin/bash\nZIG="%s/zig"\nARGS=()\nfor arg in "$@"; do\n  if [[ "$arg" != --target=* ]]; then\n    ARGS+=("$arg")\n  fi\ndone\nexec "$ZIG" cc -target loongarch64-linux-gnu "${ARGS[@]}"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-cc
-          printf '#!/bin/bash\nZIG="%s/zig"\nARGS=()\nfor arg in "$@"; do\n  if [[ "$arg" != --target=* ]]; then\n    ARGS+=("$arg")\n  fi\ndone\nexec "$ZIG" c++ -target loongarch64-linux-gnu "${ARGS[@]}"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-cxx
-          printf '#!/bin/bash\nexec %s/zig ar "$@"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-ar
+          echo 'IyEvdXNyYmluL2Jhc2gKIyAgTG9vbmdBcmNoNjQgd3JhcHBlciBmb3IgWmlnIENDIGNyb3NzLWNvbXBpbGVyCiNaSUc9Ii9vcHQvemlnLWxpbnV4LTY0XzAtMTMuMC96aWciCkFSR1M9KCkKZm9yIGFyZyAiaCI7IGRvCiAga2FzZSAiJGFyZyIgaW4gLS10YXJnZXQ9KiAtLXRhcmdldD0qOyB0aGVuCiAgICBjb250aW51ZQogIGVsaWYgWyAiJGFyZyIgPSAiLS1wYXJhbSIgXTsgdGhlbgogICAgQVJHUys9KCIkYXJnIiAiJEFSR1NbI0BARUdTXS0xFTkdUSCsjMSkpCiAgZWxpZiBbICIkYXJnIiA9ICItc3NwLWJ1ZmZlci1zaXplIiBdOyB0aGVuCiAgICBjb250aW51ZQogIGVsc2UKICAgIEFSR1MrPSgiJGFyZyIpCiAgZmlkCmRvbmUKZXhlYyAiJFpJRyIgY2MgLXRhcmdldCBsb29uZ2FyY2g2NC1saW51eC1nbnUgIiR7QVJHU1tAXX0i' | base64 -d > /usr/local/bin/loongarch64-cc
+          echo 'IyEvdXNyYmluL2Jhc2gKIyAgTG9vbmdBcmNoNjQgd3JhcHBlciBmb3IgWmlnIENDKyBjcm9zcy1jb21waWxlcgoKWklHPSIvb3B0L3ppZy1saW51eC02NF8wLTEzLjAvemlnIgpBUkdTPSgpCmZvciBhcmcgaCI7IGRvCiAga2FzZSAiJGFyZyIgaW4gLS10YXJnZXQ9KiAtLXRhcmdldD0qOyB0aGVuCiAgICBjb250aW51ZQogIGVsaWYgWyAiJGFyZyIgPSAiLS1wYXJhbSIgXTsgdGhlbgogICAgQVJHUys9KCIkYXJnIiAiJEFSR1NbI0BARUdTXS0xFTkdUSCsjMSkpCiAgZWxpZiBbICIkYXJnIiA9ICItc3NwLWJ1ZmZlci1zaXplIiBdOyB0aGVuCiAgICBjb250aW51ZQogIGVsc2UKICAgIEFSR1MrPSgiJGFyZyIpCiAgZmlkCmRvbmUKZXhlYyAiJFpZRkiIGMrKyAudGFyZ2V0IGxvb25nYXJjaDY0LWxpbnV4LWdudSAiJHtBUkdTW0BdfSI=' | base64 -d > /usr/local/bin/loongarch64-cxx
+          echo 'IyEvdXNyYmluL2Jhc2gKZXhlYyAib3B0L3ppZy1saW51eC02NF8wLTEzLjAvemlnIiBhciAkQApkb25l' | base64 -d > /usr/local/bin/loongarch64-ar
           chmod +x /usr/local/bin/loongarch64-cc /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
           ${ZIG_DIR}/zig version
           echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_GNU_LINKER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
@@ -439,7 +439,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-build-${{ matrix.target }}-
 
-      - name: Build release binary (LoongArch64 musl)
+      - name: Build release binary (LoongArch64 gnu)
         run: cargo build --release --target ${{ matrix.target }} --verbose
 
       - name: Create TAR.GZ archive
@@ -453,7 +453,7 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          echo "=== DEB Build Diagnostics (LoongArch64 musl) ==="
+          echo "=== DEB Build Diagnostics (LoongArch64 gnu) ==="
           cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb" || {
             echo "WARNING: DEB build failed (LoongArch64), continuing"
             exit 0
