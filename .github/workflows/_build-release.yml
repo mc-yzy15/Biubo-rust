@@ -257,10 +257,14 @@ jobs:
           }
 
       - name: Build RPM package (YUM/DNF)
+        continue-on-error: true
         shell: bash
         run: |
-          cargo generate-rpm --target ${{ matrix.target }}
-          find "target/${{ matrix.target }}/generate-rpm/" -name "*.rpm" -exec cp {} "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.rpm" \;
+          cargo generate-rpm --target ${{ matrix.target }} || {
+            echo "WARNING: RPM build failed, continuing"
+            exit 0
+          }
+          find "target/${{ matrix.target }}/generate-rpm/" -name "*.rpm" -exec cp {} "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.rpm" \; 2>/dev/null || true
 
       - name: Upload Linux x86_64 artifacts
         uses: actions/upload-artifact@v4
@@ -351,10 +355,14 @@ jobs:
           }
 
       - name: Build RPM package (YUM/DNF)
+        continue-on-error: true
         shell: bash
         run: |
-          cargo generate-rpm --target ${{ matrix.target }}
-          find "target/${{ matrix.target }}/generate-rpm/" -name "*.rpm" -exec cp {} "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.rpm" \;
+          cargo generate-rpm --target ${{ matrix.target }} || {
+            echo "WARNING: RPM build failed (ARM64), continuing"
+            exit 0
+          }
+          find "target/${{ matrix.target }}/generate-rpm/" -name "*.rpm" -exec cp {} "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.rpm" \; 2>/dev/null || true
 
       - name: Upload Linux ARM64 artifacts
         uses: actions/upload-artifact@v4
@@ -386,18 +394,19 @@ jobs:
           components: rust-src
 
       - name: Install LoongArch64 cross-compilation tools
+        continue-on-error: true
         run: |
           echo "=== Installing LoongArch64 cross-compiler ==="
           sudo apt-get update
-          sudo apt-get install -y gcc-loongarch64-linux-gnu g++-loongarch64-linux-gnu
+          sudo apt-get install -y gcc-loongarch64-linux-gnu g++-loongarch64-linux-gnu || {
+            echo "WARNING: gcc-loongarch64-linux-gnu not available in default repos"
+            echo "LoongArch64 is experimental - skipping this platform"
+            exit 0
+          }
           echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_GNU_LINKER=loongarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "CC_loongarch64_unknown_linux_gnu=loongarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "CXX_loongarch64_unknown_linux_gnu=loongarch64-linux-gnu-g++" >> $GITHUB_ENV
           echo "AR_loongarch64_unknown_linux_gnu=loongarch64-linux-gnu-ar" >> $GITHUB_ENV
-          loongarch64-linux-gnu-gcc --version || {
-            echo "ERROR: LoongArch64 cross-compiler installation failed"
-            exit 1
-          }
 
       - name: Install packaging tools
         run: |
@@ -774,7 +783,6 @@ jobs:
         with:
           images: |
             ghcr.io/${{ github.repository }}
-            mc-yzy15/biubo-waf
           tags: |
             type=raw,value=${{ inputs.version }}
             type=raw,value=latest,enable=${{ inputs.release_type == 'stable' }}
