@@ -737,7 +737,7 @@ jobs:
           tag_name: v${{ inputs.version }}
           name: ${{ env.PROJECT_NAME }} v${{ inputs.version }}
           body_path: release_notes.md
-          draft: false
+          draft: ${{ inputs.release_type != 'stable' && inputs.release_type != 'lts' }}
           prerelease: ${{ inputs.release_type != 'stable' && inputs.release_type != 'lts' }}
           make_latest: ${{ inputs.make_latest }}
           files: release-assets/*
