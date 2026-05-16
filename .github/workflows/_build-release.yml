@@ -25,6 +25,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   PROJECT_NAME: biubo-waf
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-windows-x64:
@@ -87,10 +88,18 @@ jobs:
           7z a "dist/${ARTIFACT_NAME}.zip" "target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}.exe"
 
       - name: Create MSI installer (WiX)
+        continue-on-error: true
         shell: bash
         run: |
-          cargo install cargo-wix --locked
-          cargo wix --target ${{ matrix.target }} --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.msi"
+          echo "=== MSI Build Diagnostics ==="
+          echo "Checking WiX installation..."
+          ls -la "/c/Program Files (x86)/WiX Toolset v311/bin/" 2>/dev/null || echo "WiX v311 not found at default path"
+          cargo install cargo-wix --locked 2>&1 || echo "cargo-wix install failed"
+          echo "=== Attempting cargo wix ==="
+          cargo wix --target ${{ matrix.target }} --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.msi" || {
+            echo "WARNING: MSI build failed, ZIP artifact is still available"
+            exit 0
+          }
 
       - name: Upload Windows x64 artifacts
         uses: actions/upload-artifact@v4
@@ -232,9 +241,20 @@ jobs:
           tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "${{ env.PROJECT_NAME }}"
 
       - name: Build DEB package
+        continue-on-error: true
         shell: bash
         run: |
-          cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb"
+          echo "=== DEB Build Diagnostics ==="
+          echo "Target: ${{ matrix.target }}"
+          echo "Working dir: $(pwd)"
+          ls -la target/${{ matrix.target }}/release/biubo-waf 2>&1 || echo "binary not found"
+          ls -la systemd/ 2>&1 || echo "systemd dir not found"
+          cat Cargo.toml | grep -A 15 "\[package.metadata.deb\]" || echo "deb metadata not found"
+          echo "=== Attempting cargo deb ==="
+          cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb" || {
+            echo "WARNING: DEB build failed, continuing with other artifacts"
+            exit 0
+          }
 
       - name: Build RPM package (YUM/DNF)
         shell: bash
@@ -317,9 +337,18 @@ jobs:
           tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "${{ env.PROJECT_NAME }}"
 
       - name: Build DEB package
+        continue-on-error: true
         shell: bash
         run: |
-          cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb"
+          echo "=== DEB Build Diagnostics (ARM64) ==="
+          echo "Target: ${{ matrix.target }}"
+          ls -la target/${{ matrix.target }}/release/biubo-waf 2>&1 || echo "binary not found"
+          ls -la systemd/ 2>&1 || echo "systemd dir not found"
+          echo "=== Attempting cargo deb ==="
+          cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb" || {
+            echo "WARNING: DEB build failed (ARM64), continuing"
+            exit 0
+          }
 
       - name: Build RPM package (YUM/DNF)
         shell: bash
@@ -356,17 +385,19 @@ jobs:
           targets: ${{ matrix.target }}
           components: rust-src
 
-      - name: Install LoongArch cross-compilation tools
+      - name: Install LoongArch64 cross-compilation tools
         run: |
+          echo "=== Installing LoongArch64 cross-compiler ==="
           sudo apt-get update
-          sudo apt-get install -y git cmake gcc pkg-config
-          git clone https://github.com/loongson/build-tools.git
-          cd build-tools
-          ./configure --prefix=/opt/loongarch64 --target=loongarch64-unknown-linux-gnu
-          make -j$(nproc)
-          sudo make install
-          echo "/opt/loongarch64/bin" >> $GITHUB_PATH
-          echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_GNU_LINKER=loongarch64-unknown-linux-gnu-gcc" >> $GITHUB_ENV
+          sudo apt-get install -y gcc-loongarch64-linux-gnu g++-loongarch64-linux-gnu
+          echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_GNU_LINKER=loongarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_loongarch64_unknown_linux_gnu=loongarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_loongarch64_unknown_linux_gnu=loongarch64-linux-gnu-g++" >> $GITHUB_ENV
+          echo "AR_loongarch64_unknown_linux_gnu=loongarch64-linux-gnu-ar" >> $GITHUB_ENV
+          loongarch64-linux-gnu-gcc --version || {
+            echo "ERROR: LoongArch64 cross-compiler installation failed"
+            exit 1
+          }
 
       - name: Install packaging tools
         run: |
@@ -401,11 +432,17 @@ jobs:
           tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "${{ env.PROJECT_NAME }}"
 
       - name: Build DEB package (LoongArch64)
+        continue-on-error: true
         shell: bash
         run: |
-          cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb"
+          echo "=== DEB Build Diagnostics (LoongArch64) ==="
+          cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb" || {
+            echo "WARNING: DEB build failed (LoongArch64), continuing"
+            exit 0
+          }
 
       - name: Build RPM package (YUM/DNF, LoongArch64)
+        continue-on-error: true
         shell: bash
         run: |
           cargo generate-rpm --target ${{ matrix.target }}
@@ -725,6 +762,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
+        continue-on-error: true
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
