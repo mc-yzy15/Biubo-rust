@@ -1,11 +1,21 @@
-use dashmap::DashMap;
-use regex::Regex;
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "advanced-rules")]
+use dashmap::DashMap;
+#[cfg(feature = "advanced-rules")]
+use regex::Regex;
+#[cfg(feature = "advanced-rules")]
 use std::collections::HashMap;
+#[cfg(feature = "advanced-rules")]
 use std::fs;
+#[cfg(feature = "advanced-rules")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "advanced-rules")]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "advanced-rules")]
 use std::sync::Arc;
+#[cfg(feature = "advanced-rules")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ============================================================================
@@ -126,22 +136,23 @@ fn default_enabled() -> bool {
     true
 }
 
+#[cfg(feature = "advanced-rules")]
 #[derive(Debug, Clone)]
 pub struct RuleMatch {
     pub rule: Rule,
-    pub matched_text: String,
-    pub match_position: Option<(usize, usize)>,
 }
 
 // ============================================================================
 // RuleLoader
 // ============================================================================
 
+#[cfg(feature = "advanced-rules")]
 pub struct RuleLoader {
     directories: Vec<PathBuf>,
     max_paranoia_level: u8,
 }
 
+#[cfg(feature = "advanced-rules")]
 impl RuleLoader {
     pub fn new(directories: Vec<PathBuf>, max_paranoia_level: u8) -> Self {
         RuleLoader {
@@ -243,14 +254,17 @@ impl RuleLoader {
 // RuleCompiler
 // ============================================================================
 
+#[cfg(feature = "advanced-rules")]
 pub struct CompiledCategory {
     pub category: RuleCategory,
     pub regex: Regex,
     pub rule_ids: Vec<u64>,
 }
 
+#[cfg(feature = "advanced-rules")]
 pub struct RuleCompiler;
 
+#[cfg(feature = "advanced-rules")]
 impl RuleCompiler {
     pub fn compile_rules(rules: &[Rule]) -> HashMap<RuleCategory, CompiledCategory> {
         let mut grouped: HashMap<RuleCategory, Vec<&Rule>> = HashMap::new();
@@ -304,26 +318,29 @@ impl RuleCompiler {
 // RuleStatistics
 // ============================================================================
 
+#[cfg(feature = "advanced-rules")]
 #[derive(Debug, Clone, Serialize)]
 pub struct RuleHitInfo {
     pub rule_id: u64,
-    pub category: String,
     pub hit_count: u64,
     pub last_hit_timestamp: u64,
 }
 
+#[cfg(feature = "advanced-rules")]
 #[derive(Debug, Clone, Serialize)]
 pub struct CategoryHitInfo {
     pub category: String,
     pub hit_count: u64,
 }
 
+#[cfg(feature = "advanced-rules")]
 pub struct RuleStatistics {
     rule_hits: DashMap<u64, AtomicU64>,
     category_hits: DashMap<String, AtomicU64>,
     rule_last_hit: DashMap<u64, AtomicU64>,
 }
 
+#[cfg(feature = "advanced-rules")]
 impl RuleStatistics {
     pub fn new() -> Self {
         RuleStatistics {
@@ -384,7 +401,6 @@ impl RuleStatistics {
 
             stats.push(RuleHitInfo {
                 rule_id,
-                category: String::new(),
                 hit_count,
                 last_hit_timestamp: last_hit,
             });
@@ -416,6 +432,7 @@ impl RuleStatistics {
 // RuleEngine
 // ============================================================================
 
+#[cfg(feature = "advanced-rules")]
 pub struct WafRequest {
     pub url: String,
     pub method: String,
@@ -425,6 +442,7 @@ pub struct WafRequest {
     pub cookies: HashMap<String, String>,
 }
 
+#[cfg(feature = "advanced-rules")]
 impl WafRequest {
     pub fn to_detection_string(&self) -> String {
         let mut parts = Vec::new();
@@ -449,20 +467,20 @@ impl WafRequest {
     }
 }
 
+#[cfg(feature = "advanced-rules")]
 pub struct RuleEngine {
     rules: DashMap<u64, Rule>,
     compiled: DashMap<RuleCategory, CompiledCategory>,
     statistics: Arc<RuleStatistics>,
     paranoia_level: u8,
-    loader_directories: Vec<PathBuf>,
 }
 
+#[cfg(feature = "advanced-rules")]
 impl RuleEngine {
     pub fn new(
         rules: Vec<Rule>,
         statistics: Arc<RuleStatistics>,
         paranoia_level: u8,
-        loader_directories: Vec<PathBuf>,
     ) -> Self {
         let compiled = RuleCompiler::compile_rules(&rules);
         let rules_map = DashMap::new();
@@ -481,7 +499,6 @@ impl RuleEngine {
             compiled: compiled_map,
             statistics,
             paranoia_level,
-            loader_directories,
         }
     }
 
@@ -490,21 +507,15 @@ impl RuleEngine {
         let mut matches = Vec::new();
 
         for entry in self.compiled.iter() {
-            let _category = entry.key();
             let compiled = entry.value();
 
-            if let Some(mat) = compiled.regex.find(&detection_text) {
-                let matched_text = mat.as_str().to_string();
-                let match_position = Some((mat.start(), mat.end()));
-
+            if compiled.regex.is_match(&detection_text) {
                 for rule_id in &compiled.rule_ids {
                     if let Some(rule_ref) = self.rules.get(rule_id) {
                         let rule = rule_ref.value().clone();
                         self.statistics.record_hit(rule.id, rule.category.as_str());
                         matches.push(RuleMatch {
                             rule,
-                            matched_text: matched_text.clone(),
-                            match_position,
                         });
                     }
                 }
@@ -558,6 +569,7 @@ impl RuleEngine {
 // RuleManager
 // ============================================================================
 
+#[cfg(feature = "advanced-rules")]
 pub struct RuleManager {
     engine: DashMap<String, Arc<RuleEngine>>,
     statistics: Arc<RuleStatistics>,
@@ -565,6 +577,7 @@ pub struct RuleManager {
     loader_directories: Vec<PathBuf>,
 }
 
+#[cfg(feature = "advanced-rules")]
 impl RuleManager {
     pub fn new(
         initial_rules: Vec<Rule>,
@@ -576,7 +589,6 @@ impl RuleManager {
             initial_rules,
             stats.clone(),
             paranoia_level,
-            loader_directories.clone(),
         ));
 
         let engine_map = DashMap::new();
@@ -599,7 +611,6 @@ impl RuleManager {
                     vec![],
                     self.statistics.clone(),
                     self.paranoia_level,
-                    self.loader_directories.clone(),
                 ));
                 self.engine
                     .insert("default".to_string(), empty_engine.clone());
@@ -617,7 +628,6 @@ impl RuleManager {
             rules,
             self.statistics.clone(),
             self.paranoia_level,
-            self.loader_directories.clone(),
         ));
 
         self.engine.insert("default".to_string(), new_engine);
@@ -732,7 +742,6 @@ impl RuleManager {
             rules,
             self.statistics.clone(),
             level,
-            self.loader_directories.clone(),
         ));
 
         self.engine.insert("default".to_string(), new_engine);
@@ -754,7 +763,7 @@ impl RuleManager {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "advanced-rules"))]
 mod tests {
     use super::*;
 
@@ -922,7 +931,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let request = WafRequest {
             url: "/search?q=<script>alert(1)</script>".to_string(),
@@ -953,7 +962,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let request = WafRequest {
             url: "/api/users?id=1 union select * from passwords".to_string(),
@@ -981,7 +990,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let request = WafRequest {
             url: "/static/../../../etc/passwd".to_string(),
@@ -1005,7 +1014,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let request = WafRequest {
             url: "/api/products?category=electronics".to_string(),
@@ -1025,7 +1034,7 @@ mod tests {
         let rules = vec![create_test_rule(1, RuleCategory::Xss, r#"<script>"#, 1)];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let malicious_request = WafRequest {
             url: "/page?content=<script>".to_string(),
@@ -1055,7 +1064,7 @@ mod tests {
         let rules = vec![create_test_rule(1, RuleCategory::Xss, r#"<script>"#, 1)];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules.clone(), stats.clone(), 1, vec![]);
+        let engine = RuleEngine::new(rules.clone(), stats.clone(), 1);
 
         let request = WafRequest {
             url: "/test?<script>".to_string(),
@@ -1181,7 +1190,6 @@ mod tests {
                 .collect(),
             stats.clone(),
             1,
-            vec![],
         );
 
         let engine_level3 = RuleEngine::new(
@@ -1192,7 +1200,6 @@ mod tests {
                 .collect(),
             stats.clone(),
             3,
-            vec![],
         );
 
         let xss_script_request = WafRequest {
@@ -1231,7 +1238,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let log4j_request = WafRequest {
             url: "/api".to_string(),
@@ -1255,7 +1262,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let ssti_request = WafRequest {
             url: "/search?q={{7*7}}".to_string(),
@@ -1281,7 +1288,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let xxe_request = WafRequest {
             url: "/api/xml".to_string(),
@@ -1305,7 +1312,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let mut headers = HashMap::new();
         headers.insert("User-Agent".to_string(), "sqlmap/1.5".to_string());
@@ -1334,7 +1341,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let multi_request = WafRequest {
             url: "/search?q=<script> union select".to_string(),
@@ -1364,7 +1371,7 @@ mod tests {
         ];
 
         let stats = Arc::new(RuleStatistics::new());
-        let engine = RuleEngine::new(rules, stats, 1, vec![]);
+        let engine = RuleEngine::new(rules, stats, 1);
 
         let categories = engine.get_categories();
         assert_eq!(categories.len(), 2);

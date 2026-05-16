@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -126,7 +128,7 @@ impl Database {
         self.dirty.store(true, Ordering::Release);
     }
 
-    #[allow(dead_code)]
+    #[cfg(feature = "plugin-system")]
     pub fn delete(&self, key: &str) -> bool {
         let mut guard = self.data.lock().expect("Failed to lock database");
         let removed = guard.remove(key).is_some();

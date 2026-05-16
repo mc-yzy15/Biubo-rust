@@ -1,12 +1,23 @@
+#![cfg(feature = "postgres-support")]
+#![allow(dead_code)]
+
+#[cfg(feature = "postgres-support")]
 use async_trait::async_trait;
+#[cfg(feature = "postgres-support")]
 use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
+#[cfg(feature = "postgres-support")]
 use serde_json;
+#[cfg(feature = "postgres-support")]
 use tokio_postgres::{NoTls, Row};
+#[cfg(feature = "postgres-support")]
 use tracing;
 
+#[cfg(feature = "postgres-support")]
 use super::{StorageDriver, StorageDriverError};
 
+#[cfg(feature = "postgres-support")]
 const TABLE_NAME: &str = "biubo_kv_store";
+#[cfg(feature = "postgres-support")]
 const MAX_POOL_SIZE: usize = 16;
 
 fn row_to_value(row: &Row) -> Option<serde_json::Value> {

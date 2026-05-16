@@ -1,17 +1,31 @@
+#![cfg(feature = "behavior-profiling")]
+#![allow(dead_code)]
+
+#[cfg(feature = "behavior-profiling")]
 use chrono::Utc;
+#[cfg(feature = "behavior-profiling")]
 use std::collections::HashSet;
 
+#[cfg(feature = "behavior-profiling")]
 use crate::core::models::{BehaviorProfile, BehaviorScore, BehaviorScoreBreakdown};
 
+#[cfg(feature = "behavior-profiling")]
 const VELOCITY_MAX_SCORE: f64 = 25.0;
+#[cfg(feature = "behavior-profiling")]
 const PATH_DIVERSITY_MAX_SCORE: f64 = 25.0;
+#[cfg(feature = "behavior-profiling")]
 const ERROR_RATE_MAX_SCORE: f64 = 25.0;
+#[cfg(feature = "behavior-profiling")]
 const SESSION_CONSISTENCY_MAX_SCORE: f64 = 25.0;
+#[cfg(feature = "behavior-profiling")]
 const SCORE_DECAY_TIME_CONSTANT: f64 = 30.0;
+#[cfg(feature = "behavior-profiling")]
 const SCORE_DECAY_MINIMUM: f64 = 0.0;
 
+#[cfg(feature = "behavior-profiling")]
 pub struct ThresholdChecker;
 
+#[cfg(feature = "behavior-profiling")]
 impl ThresholdChecker {
     pub fn check_velocity(requests_per_min: f64) -> f64 {
         if requests_per_min < 10.0 {
@@ -73,8 +87,10 @@ impl ThresholdChecker {
     }
 }
 
+#[cfg(feature = "behavior-profiling")]
 pub struct ScoreDecay;
 
+#[cfg(feature = "behavior-profiling")]
 impl ScoreDecay {
     pub fn decay_score(current_score: f64, elapsed_minutes: f64) -> f64 {
         if elapsed_minutes <= 0.0 {
@@ -88,8 +104,10 @@ impl ScoreDecay {
     }
 }
 
+#[cfg(feature = "behavior-profiling")]
 pub struct BehaviorScoreCalculator;
 
+#[cfg(feature = "behavior-profiling")]
 impl BehaviorScoreCalculator {
     pub fn compute_score(profile: &BehaviorProfile) -> BehaviorScore {
         let requests_per_min = Self::calculate_requests_per_minute(profile);
@@ -216,6 +234,7 @@ impl BehaviorScoreCalculator {
 }
 
 #[cfg(test)]
+#[cfg(feature = "behavior-profiling")]
 mod tests {
     use super::*;
     use chrono::Duration;

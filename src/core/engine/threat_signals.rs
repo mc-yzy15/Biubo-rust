@@ -14,17 +14,6 @@ static ENCODED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     ]
 });
 
-static ATTACK_PAYLOAD_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        Regex::new(r"(?i)(union\s+(all\s+)?select|or\s+1\s*=\s*1|'\s*or\s*')").expect("valid regex"),
-        Regex::new(r"(?i)(<script|javascript\s*:|on\w+\s*=)").expect("valid regex"),
-        Regex::new(r"(?i)(\.\./|\.\.\\|etc/passwd|etc/shadow)").expect("valid regex"),
-        Regex::new(r"(?i)(system\s*\(|exec\s*\(|passthru\s*\(|shell_exec\s*\()").expect("valid regex"),
-        Regex::new(r"(?i)(\$\{jndi:|<%|<\?php|<?xml)").expect("valid regex"),
-        Regex::new(r"(?i)(sqlmap|nikto|nmap|burp|dirbuster|gobuster|nuclei|wfuzz|hydra)").expect("valid regex"),
-    ]
-});
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreatSignals {
     pub has_encoded_payload: bool,
@@ -36,6 +25,7 @@ pub struct ThreatSignals {
 }
 
 impl ThreatSignals {
+    #[cfg(test)]
     pub fn none() -> Self {
         Self {
             has_encoded_payload: false,
@@ -55,6 +45,7 @@ impl ThreatSignals {
             || self.attack_progression_score > 0.0
     }
 
+    #[cfg(test)]
     pub fn combined_threat_score(&self) -> f64 {
         let encoded_weight = if self.has_encoded_payload { 0.25 } else { 0.0 };
         let progression_weight = if self.has_attack_progression { 0.25 } else { 0.0 };
@@ -93,9 +84,7 @@ pub fn compute_encoded_content_ratio(request_body: &str) -> f64 {
 }
 
 pub struct RequestRecord {
-    pub timestamp: u64,
     pub url: String,
-    pub method: String,
     pub status_code: u16,
     pub is_suspicious: bool,
 }
@@ -291,9 +280,9 @@ mod tests {
     #[test]
     fn test_has_attack_progression_with_suspicious_requests() {
         let history = vec![
-            RequestRecord { timestamp: 1, url: "/admin".to_string(), method: "GET".to_string(), status_code: 403, is_suspicious: true },
-            RequestRecord { timestamp: 2, url: "/admin/config".to_string(), method: "GET".to_string(), status_code: 403, is_suspicious: true },
-            RequestRecord { timestamp: 3, url: "/admin/users".to_string(), method: "GET".to_string(), status_code: 403, is_suspicious: true },
+            RequestRecord { url: "/admin".to_string(), status_code: 403, is_suspicious: true },
+            RequestRecord { url: "/admin/config".to_string(), status_code: 403, is_suspicious: true },
+            RequestRecord { url: "/admin/users".to_string(), status_code: 403, is_suspicious: true },
         ];
         assert!(has_attack_progression(&history));
     }
@@ -301,9 +290,9 @@ mod tests {
     #[test]
     fn test_no_attack_progression_with_normal_requests() {
         let history = vec![
-            RequestRecord { timestamp: 1, url: "/index.html".to_string(), method: "GET".to_string(), status_code: 200, is_suspicious: false },
-            RequestRecord { timestamp: 2, url: "/about".to_string(), method: "GET".to_string(), status_code: 200, is_suspicious: false },
-            RequestRecord { timestamp: 3, url: "/contact".to_string(), method: "GET".to_string(), status_code: 200, is_suspicious: false },
+            RequestRecord { url: "/index.html".to_string(), status_code: 200, is_suspicious: false },
+            RequestRecord { url: "/about".to_string(), status_code: 200, is_suspicious: false },
+            RequestRecord { url: "/contact".to_string(), status_code: 200, is_suspicious: false },
         ];
         assert!(!has_attack_progression(&history));
     }

@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 use crate::plugins::loader::PluginLoader;
 use crate::plugins::types::{PluginInstance, PluginType};
 use dashmap::DashMap;
@@ -65,6 +67,7 @@ impl PluginRegistry {
         self.plugins.iter().map(|r| r.value().clone()).collect()
     }
 
+    #[cfg(feature = "plugin-system")]
     pub fn list_by_type(&self, plugin_type: &PluginType) -> Vec<PluginInstance> {
         self.plugins.iter()
             .filter(|r| &r.value().metadata.plugin_type == plugin_type)
@@ -72,6 +75,7 @@ impl PluginRegistry {
             .collect()
     }
 
+    #[cfg(feature = "plugin-system")]
     pub fn list_enabled(&self) -> Vec<PluginInstance> {
         self.plugins.iter()
             .filter(|r| r.value().is_enabled())
@@ -79,6 +83,7 @@ impl PluginRegistry {
             .collect()
     }
 
+    #[cfg(feature = "plugin-system")]
     pub fn reload(&self, loader: &mut PluginLoader) -> usize {
         let new_plugins = loader.scan_plugins();
         let mut reloaded = 0;
@@ -104,10 +109,12 @@ impl PluginRegistry {
         reloaded
     }
 
+    #[cfg(feature = "plugin-system")]
     pub fn count(&self) -> usize {
         self.plugins.len()
     }
 
+    #[cfg(feature = "plugin-system")]
     pub fn load_from_directory(&self, loader: &mut PluginLoader, base_dir: &Path) -> Result<usize, String> {
         let plugins = loader.scan_plugins();
         let count = plugins.len();

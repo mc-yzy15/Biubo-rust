@@ -1,5 +1,8 @@
 use crate::api::app::AppState;
+#[cfg(feature = "plugin-system")]
 use crate::plugins::{get_plugin_registry, loader::PluginLoader};
+#[cfg(not(feature = "plugin-system"))]
+use crate::plugins::get_plugin_registry;
 use axum::Router;
 use axum::extract::Path;
 use axum::extract::State;
@@ -174,18 +177,25 @@ async fn remove_plugin(Path(name): Path<String>) -> Response {
 }
 
 async fn reload_plugins(_state: State<Arc<AppState>>) -> Response {
-    let registry = get_plugin_registry();
-    let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let mut loader = PluginLoader::new(&project_root);
+    #[cfg(feature = "plugin-system")]
+    {
+        let registry = get_plugin_registry();
+        let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mut loader = PluginLoader::new(&project_root);
 
-    let count = registry.reload(&mut loader);
+        let count = registry.reload(&mut loader);
 
-    Json(json!({
-        "status": "success",
-        "message": format!("Reloaded {} plugins", count),
-        "count": count,
-    }))
-    .into_response()
+        Json(json!({
+            "status": "success",
+            "message": format!("Reloaded {} plugins", count),
+            "count": count,
+        }))
+        .into_response()
+    }
+    #[cfg(not(feature = "plugin-system"))]
+    {
+        error_response(StatusCode::SERVICE_UNAVAILABLE, "Plugin system is not enabled")
+    }
 }
 
 fn serialize_config(config: &crate::plugins::types::PluginConfig) -> serde_json::Value {

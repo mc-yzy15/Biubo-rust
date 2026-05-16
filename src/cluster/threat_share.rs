@@ -1,3 +1,6 @@
+#![cfg(feature = "cluster-mode")]
+#![allow(dead_code)]
+
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -38,18 +41,15 @@ impl ThreatEvent {
 }
 
 #[derive(Debug, Clone)]
-struct BlockedIPEntry {
+pub struct BlockedIPEntry {
     pub ip: String,
-    pub attack_type: String,
-    pub blocked_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
-    pub source_node_id: String,
-    pub event_id: String,
 }
 
 pub struct ThreatIntelligenceShare {
     pub manager: Arc<ClusterManager>,
     pub settings: SharedSettings,
+    #[cfg(feature = "redis-support")]
     pub redis_client: Option<redis::aio::ConnectionManager>,
     pub local_blocklist: DashMap<String, BlockedIPEntry>,
     pub event_log: DashMap<String, ThreatEvent>,
@@ -62,6 +62,7 @@ impl ThreatIntelligenceShare {
         Self {
             manager,
             settings,
+            #[cfg(feature = "redis-support")]
             redis_client: None,
             local_blocklist: DashMap::new(),
             event_log: DashMap::new(),
@@ -73,6 +74,7 @@ impl ThreatIntelligenceShare {
         }
     }
 
+    #[cfg(feature = "redis-support")]
     pub async fn with_redis(&mut self, redis_url: &str) -> bool {
         match redis::Client::open(redis_url) {
             Ok(client) => match client.get_connection_manager().await {
@@ -111,11 +113,7 @@ impl ThreatIntelligenceShare {
             event.ip.clone(),
             BlockedIPEntry {
                 ip: event.ip.clone(),
-                attack_type: event.attack_type.clone(),
-                blocked_at: Utc::now(),
                 expires_at: Utc::now() + chrono::Duration::seconds(IP_BLOCKLIST_TTL_SECS as i64),
-                source_node_id: event.source_node_id.clone(),
-                event_id: event.id.clone(),
             },
         );
 
@@ -131,6 +129,7 @@ impl ThreatIntelligenceShare {
             return Ok(0);
         }
 
+        #[cfg(feature = "redis-support")]
         if self.redis_client.is_some() {
             match self.broadcast_via_redis(event).await {
                 Ok(_) => {
@@ -154,10 +153,19 @@ impl ThreatIntelligenceShare {
             );
             self.broadcast_via_http(event, &target_nodes).await;
         }
+        #[cfg(not(feature = "redis-support"))]
+        {
+            tracing::info!(
+                "[ThreatShare] Broadcasting threat event via HTTP to {} nodes",
+                target_nodes.len()
+            );
+            self.broadcast_via_http(event, &target_nodes).await;
+        }
 
         Ok(target_nodes.len())
     }
 
+    #[cfg(feature = "redis-support")]
     async fn broadcast_via_redis(&self, event: &ThreatEvent) -> Result<(), String> {
         let redis_client = self
             .redis_client
@@ -248,11 +256,7 @@ impl ThreatIntelligenceShare {
             event.ip.clone(),
             BlockedIPEntry {
                 ip: event.ip.clone(),
-                attack_type: event.attack_type.clone(),
-                blocked_at: Utc::now(),
                 expires_at: Utc::now() + chrono::Duration::seconds(IP_BLOCKLIST_TTL_SECS as i64),
-                source_node_id: event.source_node_id.clone(),
-                event_id: event.id.clone(),
             },
         );
 
@@ -458,6 +462,7 @@ mod tests {
     fn test_threat_intelligence_share_initialization() {
         let (_manager, share) = create_test_share();
 
+        #[cfg(feature = "redis-support")]
         assert!(share.redis_client.is_none());
         assert_eq!(share.local_blocklist.len(), 0);
         assert_eq!(share.event_log.len(), 0);

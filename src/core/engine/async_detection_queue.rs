@@ -17,7 +17,6 @@ pub struct DetectionTask {
     pub cookies: HashMap<String, String>,
     pub body: Vec<u8>,
     pub args: HashMap<String, String>,
-    pub client_ip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,17 +47,20 @@ impl AsyncDetectionQueue {
             .map_err(|e| format!("Failed to submit detection task: {}", e))
     }
 
-    pub fn get_result(&self, request_id: &str) -> Option<DetectionResult> {
+    #[cfg(test)]
+    pub fn get_result(&self, request_id: &str) -> Option<AsyncDetectionResult> {
         self.results
             .get(request_id)
-            .map(|entry| entry.detection.clone())
+            .map(|entry| entry.value().clone())
     }
 
+    #[cfg(test)]
     pub fn remove_result(&self, request_id: &str) {
         self.results.remove(request_id);
     }
 }
 
+#[cfg(test)]
 pub async fn detection_worker(
     mut receiver: mpsc::Receiver<DetectionTask>,
     settings: Arc<parking_lot::RwLock<Settings>>,

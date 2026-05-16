@@ -66,6 +66,7 @@ impl WafEvent {
         matches!(self, WafEvent::Cluster { .. })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_detection(
         ip: String,
         attack_type: String,
@@ -81,6 +82,7 @@ impl WafEvent {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_block(ip: String, reason: String) -> Self {
         WafEvent::Block {
             ip,
@@ -89,6 +91,7 @@ impl WafEvent {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_unblock(ip: String) -> Self {
         WafEvent::Unblock {
             ip,
@@ -96,6 +99,7 @@ impl WafEvent {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_threat_score(ip: String, score: f64) -> Self {
         WafEvent::ThreatScoreUpdate {
             ip,
@@ -104,6 +108,7 @@ impl WafEvent {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_cluster(node_id: String, event_type: String) -> Self {
         WafEvent::Cluster {
             node_id,
@@ -112,6 +117,7 @@ impl WafEvent {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_config_change(config_type: String) -> Self {
         WafEvent::ConfigChange {
             config_type,
@@ -129,8 +135,8 @@ pub struct EventBroadcaster {
 
 #[derive(Clone)]
 pub struct WsClient {
-    api_key: String,
-    permissions: Vec<String>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub permissions: Vec<String>,
 }
 
 impl EventBroadcaster {
@@ -143,13 +149,13 @@ impl EventBroadcaster {
         }
     }
 
+    #[cfg(test)]
     pub async fn broadcast(&self, event: WafEvent) {
         let _ = self.sender.send(event);
     }
 
     pub fn add_client(
         &self,
-        api_key: String,
         permissions: Vec<String>,
     ) -> (u64, broadcast::Receiver<WafEvent>) {
         let client_id = self
@@ -159,7 +165,6 @@ impl EventBroadcaster {
         self.clients.insert(
             client_id,
             WsClient {
-                api_key,
                 permissions,
             },
         );
@@ -177,6 +182,7 @@ impl EventBroadcaster {
         tracing::info!("WebSocket client disconnected: id={}", client_id);
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
@@ -289,11 +295,11 @@ async fn handle_websocket(
     broadcaster: EventBroadcaster,
 ) {
     let (client_id, mut event_receiver) =
-        broadcaster.add_client("anonymous".to_string(), permissions.clone());
+        broadcaster.add_client(permissions.clone());
 
     let mut ping_interval = interval(Duration::from_secs(30));
     let mut expecting_pong = false;
-    let mut pong_timeout: Option<tokio::time::Sleep> = None;
+    let mut pong_timeout: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
 
     loop {
         tokio::select! {
@@ -312,12 +318,11 @@ async fn handle_websocket(
                     break;
                 }
                 expecting_pong = true;
-                pong_timeout = Some(tokio::time::sleep(Duration::from_secs(10)));
+                pong_timeout = Some(Box::pin(tokio::time::sleep(Duration::from_secs(10))));
             }
             _ = async {
-                if let Some(timeout) = pong_timeout.as_mut() {
-                    let timeout_pinned = unsafe { std::pin::Pin::new_unchecked(timeout) };
-                    timeout_pinned.await
+                if let Some(timeout) = &mut pong_timeout {
+                    timeout.await
                 } else {
                     std::future::pending::<()>().await
                 }
@@ -424,7 +429,7 @@ mod tests {
     fn test_event_broadcaster_add_remove_client() {
         let broadcaster = EventBroadcaster::new();
         let (client_id, _receiver) =
-            broadcaster.add_client("test-key".to_string(), vec!["read".to_string()]);
+            broadcaster.add_client(vec!["read".to_string()]);
         assert_eq!(broadcaster.client_count(), 1);
         broadcaster.remove_client(client_id);
         assert_eq!(broadcaster.client_count(), 0);
@@ -707,9 +712,9 @@ mod tests {
     #[test]
     fn test_client_id_incremental() {
         let broadcaster = EventBroadcaster::new();
-        let (id1, _) = broadcaster.add_client("key1".to_string(), vec![]);
-        let (id2, _) = broadcaster.add_client("key2".to_string(), vec![]);
-        let (id3, _) = broadcaster.add_client("key3".to_string(), vec![]);
+        let (id1, _) = broadcaster.add_client(vec![]);
+        let (id2, _) = broadcaster.add_client(vec![]);
+        let (id3, _) = broadcaster.add_client(vec![]);
         assert!(id1 < id2);
         assert!(id2 < id3);
     }

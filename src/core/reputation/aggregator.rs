@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use tokio::sync::Mutex;
 
 use crate::core::models::UnifiedReputationScore;
 use crate::core::reputation::manager::ReputationManager;
@@ -11,7 +10,6 @@ pub struct CachedReputation {
     pub score: UnifiedReputationScore,
     pub cached_at: Instant,
     pub expires_at: Instant,
-    pub is_flagged: bool,
 }
 
 pub struct ReputationAggregatorConfig {
@@ -43,7 +41,6 @@ pub struct ReputationAggregator {
     max_cache_size: usize,
     clean_ttl: Duration,
     flagged_ttl: Duration,
-    cleanup_lock: Mutex<()>,
 }
 
 impl ReputationAggregator {
@@ -53,7 +50,6 @@ impl ReputationAggregator {
             max_cache_size: config.max_cache_size,
             clean_ttl: config.clean_ttl,
             flagged_ttl: config.flagged_ttl,
-            cleanup_lock: Mutex::new(()),
         }
     }
 
@@ -115,7 +111,6 @@ impl ReputationAggregator {
             score: unified_score.clone(),
             cached_at: Instant::now(),
             expires_at: Instant::now() + ttl,
-            is_flagged,
         };
 
         self.cache.insert(ip.to_string(), cached_entry);
@@ -190,6 +185,7 @@ impl ReputationAggregator {
         }
     }
 
+    #[cfg(test)]
     pub fn cleanup_expired(&self) -> usize {
         let now = Instant::now();
         let mut removed_count = 0;
@@ -217,10 +213,12 @@ impl ReputationAggregator {
         removed_count
     }
 
+    #[cfg(test)]
     pub fn cache_size(&self) -> usize {
         self.cache.len()
     }
 
+    #[cfg(test)]
     pub fn cache_hits(&self, ip: &str) -> bool {
         if let Some(entry) = self.cache.get(ip) {
             entry.value().expires_at > Instant::now()
@@ -229,6 +227,7 @@ impl ReputationAggregator {
         }
     }
 
+    #[cfg(test)]
     pub fn clear_cache(&self) {
         self.cache.clear();
         tracing::info!("Reputation cache cleared");
@@ -501,7 +500,6 @@ mod aggregator_tests {
             score: create_test_score("1.1.1.1", 30.0),
             cached_at: now,
             expires_at: now + Duration::from_secs(3600),
-            is_flagged: false,
         };
         aggregator.cache.insert("1.1.1.1".to_string(), valid_entry);
 
@@ -509,7 +507,6 @@ mod aggregator_tests {
             score: create_test_score("2.2.2.2", 80.0),
             cached_at: now - Duration::from_secs(3700),
             expires_at: now - Duration::from_secs(100),
-            is_flagged: true,
         };
         aggregator.cache.insert("2.2.2.2".to_string(), expired_entry);
 
@@ -565,33 +562,6 @@ mod aggregator_tests {
     }
 
     #[test]
-    fn test_is_flagged_threshold() {
-        let aggregator = ReputationAggregator::with_defaults();
-
-        let flagged_entry = CachedReputation {
-            score: create_test_score("3.3.3.3", 75.0),
-            cached_at: Instant::now(),
-            expires_at: Instant::now() + Duration::from_secs(300),
-            is_flagged: true,
-        };
-        aggregator.cache.insert("3.3.3.3".to_string(), flagged_entry);
-
-        let clean_entry = CachedReputation {
-            score: create_test_score("4.4.4.4", 20.0),
-            cached_at: Instant::now(),
-            expires_at: Instant::now() + Duration::from_secs(3600),
-            is_flagged: false,
-        };
-        aggregator.cache.insert("4.4.4.4".to_string(), clean_entry);
-
-        let flagged = aggregator.cache.get("3.3.3.3").unwrap();
-        assert!(flagged.value().is_flagged);
-
-        let clean = aggregator.cache.get("4.4.4.4").unwrap();
-        assert!(!clean.value().is_flagged);
-    }
-
-    #[test]
     fn test_clear_cache() {
         let aggregator = ReputationAggregator::with_defaults();
 
@@ -600,7 +570,6 @@ mod aggregator_tests {
                 score: create_test_score(&format!("5.5.5.{}", i), 50.0),
                 cached_at: Instant::now(),
                 expires_at: Instant::now() + Duration::from_secs(3600),
-                is_flagged: false,
             };
             aggregator.cache.insert(format!("5.5.5.{}", i), entry);
         }

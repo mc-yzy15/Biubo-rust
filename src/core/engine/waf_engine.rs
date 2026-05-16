@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -5,11 +7,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
+#[cfg(feature = "advanced-rules")]
 use std::sync::Arc;
 
 use crate::config::settings::Settings;
 use crate::core::engine::rules::COMPILED_RULES;
 use crate::core::engine::threat_signals::{self, ThreatSignals};
+#[cfg(feature = "advanced-rules")]
 use crate::core::rules::{RuleEngine, WafRequest};
 use crate::data::storage::manager::get_db;
 use crate::services::llm::client::llm_call;
@@ -81,6 +85,7 @@ impl DetectionResult {
         }
     }
 
+    #[cfg(test)]
     pub fn from_llm(result: DetectionResult, tier: u8, verdict: String) -> Self {
         DetectionResult {
             llm_tier_used: Some(tier),
@@ -109,7 +114,8 @@ impl DetectionResult {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(feature = "llm-detection")]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn error() -> Self {
         DetectionResult {
             detection_type: "error".to_string(),
@@ -144,9 +150,13 @@ static HOST_COMPILED_RULES: once_cell::sync::Lazy<DashMap<String, HostCompiledRu
 static HOST_RULE_HASH_CACHE: once_cell::sync::Lazy<DashMap<String, String>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
+#[cfg(feature = "advanced-rules")]
+#[allow(dead_code)]
 static GLOBAL_RULE_ENGINE: once_cell::sync::Lazy<Option<Arc<RuleEngine>>> =
     once_cell::sync::Lazy::new(|| None);
 
+#[cfg(feature = "advanced-rules")]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn set_global_rule_engine(engine: Arc<RuleEngine>) {
     static ENGINE_REF: once_cell::sync::Lazy<std::sync::Mutex<Option<Arc<RuleEngine>>>> =
         once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
@@ -156,6 +166,7 @@ pub fn set_global_rule_engine(engine: Arc<RuleEngine>) {
     }
 }
 
+#[cfg(feature = "advanced-rules")]
 fn get_global_rule_engine() -> Option<Arc<RuleEngine>> {
     static ENGINE_REF: once_cell::sync::Lazy<std::sync::Mutex<Option<Arc<RuleEngine>>>> =
         once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
@@ -468,6 +479,7 @@ pub async fn detect_request(
 
     let parsed_body = parse_body(body, &content_type);
 
+    #[cfg(feature = "advanced-rules")]
     if let Some(rule_engine) = get_global_rule_engine() {
         let waf_req = WafRequest {
             url: url.to_string(),
@@ -655,16 +667,7 @@ fn build_ip_history(host: &str, headers: &HashMap<String, String>) -> Vec<threat
         let entry_cdn_ip = entry.get("cdn_ip").and_then(|v| v.as_str()).unwrap_or("");
 
         if entry_ip == client_ip || entry_cdn_ip == client_ip {
-            let timestamp = entry
-                .get("timestamp")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
             let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let method = entry
-                .get("method")
-                .and_then(|v| v.as_str())
-                .unwrap_or("GET")
-                .to_string();
             let status_code = entry
                 .get("status")
                 .and_then(|v| v.as_u64())
@@ -675,9 +678,7 @@ fn build_ip_history(host: &str, headers: &HashMap<String, String>) -> Vec<threat
                 .unwrap_or(false);
 
             history.push(threat_signals::RequestRecord {
-                timestamp,
                 url,
-                method,
                 status_code,
                 is_suspicious,
             });
@@ -830,7 +831,7 @@ pub fn start_cache_gc_worker(cache_ttl: u64, gc_interval: u64) {
 
 pub fn quick_detect_request(
     url: &str,
-    method: &str,
+    #[allow(unused_variables)] method: &str,
     headers: &HashMap<String, String>,
     cookies: &HashMap<String, String>,
     body: &[u8],
@@ -867,6 +868,7 @@ pub fn quick_detect_request(
 
     let parsed_body = parse_body(body, &content_type);
 
+    #[cfg(feature = "advanced-rules")]
     if let Some(rule_engine) = get_global_rule_engine() {
         let waf_req = WafRequest {
             url: url.to_string(),

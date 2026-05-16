@@ -15,7 +15,6 @@ use crate::data::storage::manager::get_db;
 #[derive(Debug, Deserialize)]
 struct CheckRequest {
     ip: String,
-    user_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::core::models::{ClusterRole, WafApiKey};
-use crate::data::storage::driver::StorageDriverType;
+use crate::data::storage::StorageDriverType;
 
 pub type SharedSettings = Arc<RwLock<Settings>>;
 
@@ -16,6 +16,7 @@ pub type SharedSettings = Arc<RwLock<Settings>>;
 pub struct IpHeaderConfig {
     pub state: bool,
     pub order: Vec<String>,
+    pub trusted_proxies: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +151,7 @@ impl Default for Settings {
                     "X-Real-IP".to_string(),
                     "X-Forwarded-For".to_string(),
                 ],
+                trusted_proxies: Vec::new(),
             },
             rate_limit_per_sec: 15,
             rate_ban_threshold: 30,
@@ -233,6 +235,7 @@ const DEFAULT_UPLOAD_EXTENSIONS: &[&str] = &[
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[allow(dead_code)]
 struct PersistedConfig {
     waf_port: Option<u16>,
     dashboard_password: Option<String>,
@@ -278,6 +281,69 @@ impl Settings {
         settings
     }
 
+    pub fn load_and_validate() -> Result<Self, String> {
+        let settings = Self::load();
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.waf_port == 0 {
+            return Err("WAF_PORT cannot be 0".to_string());
+        }
+
+        if self.ssl_enabled && self.ssl_port == 0 {
+            return Err("SSL_PORT cannot be 0 when SSL is enabled".to_string());
+        }
+
+        if self.session_timeout <= 0 {
+            return Err("SESSION_TIMEOUT must be positive".to_string());
+        }
+
+        if self.cache_ttl <= 0 {
+            return Err("CACHE_TTL must be positive".to_string());
+        }
+
+        if self.rate_limit_per_sec <= 0 {
+            return Err("RATE_LIMIT_PER_SEC must be positive".to_string());
+        }
+
+        if self.upload_max_size == 0 {
+            return Err("UPLOAD_MAX_SIZE cannot be 0".to_string());
+        }
+
+        if self.challenge_secret.is_empty() {
+            return Err("CHALLENGE_SECRET cannot be empty".to_string());
+        }
+
+        if self.challenge_expire <= 0 {
+            return Err("CHALLENGE_EXPIRE must be positive".to_string());
+        }
+
+        for (host, target) in &self.proxy_map {
+            if host.is_empty() {
+                return Err("PROXY_MAP contains empty host key".to_string());
+            }
+            if target.is_empty() {
+                return Err(format!("PROXY_MAP[{}] has empty target URL", host));
+            }
+            if !target.starts_with("http://") && !target.starts_with("https://") {
+                return Err(format!("PROXY_MAP[{}] target must start with http:// or https://", host));
+            }
+        }
+
+        if self.ssl_enabled {
+            if self.ssl_domains.is_empty() {
+                return Err("SSL_DOMAINS cannot be empty when SSL is enabled".to_string());
+            }
+            if self.ssl_acme_email.is_empty() {
+                return Err("SSL_ACME_EMAIL cannot be empty when SSL is enabled".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn is_initialized(&self) -> bool {
         !self.proxy_map.is_empty()
     }
@@ -295,7 +361,9 @@ impl Settings {
             "LLM_BASE_URL": self.llm_base_url,
             "STORAGE_DRIVER": match self.storage_driver {
                 StorageDriverType::MsgPack => "msgpack",
+                #[cfg(feature = "redis-support")]
                 StorageDriverType::Redis => "redis",
+                #[cfg(feature = "postgres-support")]
                 StorageDriverType::PostgreSQL => "postgresql",
             },
             "STORAGE_REDIS_URL": self.redis_url,
@@ -481,7 +549,9 @@ impl Settings {
         if let Ok(v) = env::var("STORAGE_DRIVER") {
             match v.to_lowercase().as_str() {
                 "msgpack" => self.storage_driver = StorageDriverType::MsgPack,
+                #[cfg(feature = "redis-support")]
                 "redis" => self.storage_driver = StorageDriverType::Redis,
+                #[cfg(feature = "postgres-support")]
                 "postgresql" => self.storage_driver = StorageDriverType::PostgreSQL,
                 _ => tracing::warn!("Invalid STORAGE_DRIVER value: {}, using default", v),
             }

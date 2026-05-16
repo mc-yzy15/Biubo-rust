@@ -1,17 +1,32 @@
+#![cfg(feature = "behavior-profiling")]
+#![allow(dead_code)]
+
+#[cfg(feature = "behavior-profiling")]
 use chrono::{DateTime, Duration, Utc};
+#[cfg(feature = "behavior-profiling")]
 use dashmap::DashMap;
+#[cfg(feature = "behavior-profiling")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "behavior-profiling")]
 use std::collections::{HashSet, VecDeque};
+#[cfg(feature = "behavior-profiling")]
 use std::f64::consts::E;
+#[cfg(feature = "behavior-profiling")]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "behavior-profiling")]
 use std::sync::Arc;
+#[cfg(feature = "behavior-profiling")]
 use tokio::time::{interval, Duration as TokioDuration};
+#[cfg(feature = "behavior-profiling")]
 use tracing::{debug, info};
 
+#[cfg(feature = "behavior-profiling")]
 use crate::core::models::{BehaviorMetric, BehaviorProfile, BehaviorScore, BehaviorScoreBreakdown};
 
+#[cfg(feature = "behavior-profiling")]
 pub mod scoring;
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorProfilingConfig {
     pub enabled: bool,
@@ -21,6 +36,7 @@ pub struct BehaviorProfilingConfig {
     pub max_profiles: usize,
 }
 
+#[cfg(feature = "behavior-profiling")]
 impl Default for BehaviorProfilingConfig {
     fn default() -> Self {
         BehaviorProfilingConfig {
@@ -33,6 +49,7 @@ impl Default for BehaviorProfilingConfig {
     }
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug, Clone)]
 pub struct RequestRecord {
     pub timestamp: DateTime<Utc>,
@@ -41,6 +58,7 @@ pub struct RequestRecord {
     pub user_agent: String,
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug)]
 pub struct IPBehaviorMetrics {
     pub requests: VecDeque<RequestRecord>,
@@ -50,6 +68,7 @@ pub struct IPBehaviorMetrics {
     pub window_start: DateTime<Utc>,
 }
 
+#[cfg(feature = "behavior-profiling")]
 impl IPBehaviorMetrics {
     fn new(now: DateTime<Utc>) -> Self {
         IPBehaviorMetrics {
@@ -62,6 +81,7 @@ impl IPBehaviorMetrics {
     }
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug)]
 pub struct BehaviorMetricsCollector {
     metrics: DashMap<String, IPBehaviorMetrics>,
@@ -69,6 +89,7 @@ pub struct BehaviorMetricsCollector {
     total_requests: AtomicU64,
 }
 
+#[cfg(feature = "behavior-profiling")]
 impl BehaviorMetricsCollector {
     pub fn new(config: BehaviorProfilingConfig) -> Self {
         BehaviorMetricsCollector {
@@ -222,6 +243,7 @@ impl BehaviorMetricsCollector {
     }
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug, Clone)]
 pub struct IPBehaviorMetricsSnapshot {
     pub request_count: u64,
@@ -233,6 +255,7 @@ pub struct IPBehaviorMetricsSnapshot {
     pub error_rate: f64,
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug)]
 pub struct BehaviorScoreEngine {
     collector: Arc<BehaviorMetricsCollector>,
@@ -242,6 +265,7 @@ pub struct BehaviorScoreEngine {
     decay_half_life_minutes: f64,
 }
 
+#[cfg(feature = "behavior-profiling")]
 impl BehaviorScoreEngine {
     pub fn new(
         collector: Arc<BehaviorMetricsCollector>,
@@ -286,11 +310,6 @@ impl BehaviorScoreEngine {
         let mut factors = Vec::new();
 
         let unique_paths_count = metrics.unique_paths.len() as u64;
-        let _paths_per_60s = if metrics.requests_per_minute > 0.0 {
-            (unique_paths_count as f64 / metrics.requests_per_minute) * 60.0
-        } else {
-            0.0
-        };
 
         if unique_paths_count > 30 && metrics.error_rate > 0.4 {
             diversity_score += 40.0;
@@ -419,6 +438,7 @@ impl BehaviorScoreEngine {
     }
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrichedBehaviorProfile {
     pub ip: String,
@@ -435,6 +455,7 @@ pub struct EnrichedBehaviorProfile {
     pub created_at: DateTime<Utc>,
 }
 
+#[cfg(feature = "behavior-profiling")]
 impl EnrichedBehaviorProfile {
     pub fn from_profile_and_score(
         profile: &BehaviorProfile,
@@ -458,6 +479,7 @@ impl EnrichedBehaviorProfile {
     }
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug)]
 pub struct BehaviorProfileManager {
     profiles: DashMap<String, BehaviorProfile>,
@@ -466,6 +488,7 @@ pub struct BehaviorProfileManager {
     config: BehaviorProfilingConfig,
 }
 
+#[cfg(feature = "behavior-profiling")]
 impl BehaviorProfileManager {
     pub fn new(
         collector: Arc<BehaviorMetricsCollector>,
@@ -622,6 +645,7 @@ impl BehaviorProfileManager {
 }
 
 #[cfg(test)]
+#[cfg(feature = "behavior-profiling")]
 mod tests {
     use super::*;
     use std::thread;

@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
+#[cfg(feature = "plugin-system")]
 pub mod exporter_queue;
 pub mod loader;
 pub mod registry;
@@ -9,13 +13,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::plugins::exporter_queue::{run_exporter_worker, ExporterQueue};
 use crate::plugins::loader::PluginLoader;
 use crate::plugins::registry::PluginRegistry;
 use crate::plugins::types::{PluginConfig, PluginType};
 
+#[cfg(feature = "plugin-system")]
+use crate::plugins::exporter_queue::{run_exporter_worker, ExporterQueue};
+
 static PLUGIN_REGISTRY: Lazy<PluginRegistry> = Lazy::new(PluginRegistry::new);
 
+#[cfg(feature = "plugin-system")]
 static EXPORTER_QUEUE: Lazy<Arc<RwLock<Option<ExporterQueue>>>> =
     Lazy::new(|| Arc::new(RwLock::new(None)));
 
@@ -23,6 +30,7 @@ pub fn get_plugin_registry() -> &'static PluginRegistry {
     &PLUGIN_REGISTRY
 }
 
+#[cfg(feature = "plugin-system")]
 pub fn init_plugins() {
     tracing::info!("Initializing plugin system...");
 
@@ -39,6 +47,7 @@ pub fn init_plugins() {
     }
 }
 
+#[cfg(feature = "plugin-system")]
 pub fn get_plugin_exporters() -> Vec<(String, crate::plugins::types::LogExporterConfig)> {
     let registry = get_plugin_registry();
     let enabled_plugins = registry.list_enabled();
@@ -56,6 +65,7 @@ pub fn get_plugin_exporters() -> Vec<(String, crate::plugins::types::LogExporter
         .collect()
 }
 
+#[cfg(feature = "plugin-system")]
 pub async fn trigger_exporters(log_entry: serde_json::Value) {
     let queue_guard = EXPORTER_QUEUE.read().await;
     if let Some(ref queue) = *queue_guard {
@@ -65,6 +75,7 @@ pub async fn trigger_exporters(log_entry: serde_json::Value) {
     }
 }
 
+#[cfg(feature = "plugin-system")]
 pub async fn init_exporter_queue_worker() {
     let exporters = get_plugin_exporters();
     if exporters.is_empty() {
@@ -85,6 +96,7 @@ pub async fn init_exporter_queue_worker() {
     });
 }
 
+#[cfg(feature = "plugin-system")]
 pub fn get_plugin_detection_rules() -> HashMap<String, Vec<String>> {
     let mut rules = HashMap::new();
 

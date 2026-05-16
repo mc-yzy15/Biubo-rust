@@ -1,0 +1,22 @@
+{
+  "API_KEY": "",
+  "CORS_ORIGINS": [
+    "http://ip.zplb.org.cn:7000"
+  ],
+  "DASHBOARD_PASSWORD": "015714e2911e5ca9",
+  "DASHBOARD_PATH": "/admin",
+  "LLM_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "LLM_MODEL": "qwen-plus",
+  "PROXY_MAP": {
+    "example.com": "http://backend:80"
+  },
+  "SSL_ACME_EMAIL": "",
+  "SSL_CERT_DIR": "F:\\Users\\Yzy15\\Documents\\GitHub\\Biubo-rust\\ssl",
+  "SSL_DOMAINS": [],
+  "SSL_ENABLED": false,
+  "SSL_PORT": 443,
+  "STORAGE_DRIVER": "msgpack",
+  "STORAGE_POSTGRES_URL": "",
+  "STORAGE_REDIS_URL": "",
+  "WAF_PORT": 8080
+}

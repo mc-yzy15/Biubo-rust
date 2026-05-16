@@ -1,13 +1,24 @@
+#![cfg(feature = "redis-support")]
+#![allow(dead_code)]
+
+#[cfg(feature = "redis-support")]
 use std::time::Duration;
 
+#[cfg(feature = "redis-support")]
 use async_trait::async_trait;
+#[cfg(feature = "redis-support")]
 use redis::AsyncCommands;
+#[cfg(feature = "redis-support")]
 use tracing;
 
+#[cfg(feature = "redis-support")]
 use super::{StorageDriver, StorageDriverError};
 
+#[cfg(feature = "redis-support")]
 const REDIS_KEY_PREFIX: &str = "biubo:waf:";
+#[cfg(feature = "redis-support")]
 const MAX_RETRY_ATTEMPTS: u32 = 3;
+#[cfg(feature = "redis-support")]
 const INITIAL_RETRY_DELAY_MS: u64 = 50;
 
 pub struct RedisDriver {

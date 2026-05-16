@@ -58,6 +58,7 @@ pub struct PluginInstance {
 }
 
 impl PluginInstance {
+    #[cfg(feature = "plugin-system")]
     pub fn new(metadata: PluginMetadata, config: PluginConfig) -> Self {
         Self {
             metadata,
@@ -72,6 +73,7 @@ impl PluginInstance {
         self
     }
 
+    #[cfg(feature = "plugin-system")]
     pub fn is_enabled(&self) -> bool {
         matches!(self.status, PluginStatus::Enabled)
     }
@@ -84,6 +86,7 @@ impl PluginInstance {
         self.status = PluginStatus::Disabled;
     }
 
+    #[cfg(feature = "plugin-system")]
     pub fn set_error(&mut self, message: String) {
         self.status = PluginStatus::Error(message);
     }

@@ -1,22 +1,25 @@
+#![allow(dead_code)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{redis_driver::RedisDriver, postgres_driver::PostgreSQLDriver};
+use super::StorageDriverType;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum StorageDriverType {
-    MsgPack,
-    Redis,
-    PostgreSQL,
-}
+#[cfg(feature = "redis-support")]
+use super::redis_driver::RedisDriver;
+
+#[cfg(feature = "postgres-support")]
+use super::postgres_driver::PostgreSQLDriver;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub driver_type: StorageDriverType,
+    #[cfg(feature = "redis-support")]
     pub redis_url: Option<String>,
+    #[cfg(feature = "postgres-support")]
     pub postgres_url: Option<String>,
     pub msgpack_path: Option<String>,
     pub flush_interval: Option<u64>,
@@ -26,7 +29,9 @@ impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             driver_type: StorageDriverType::MsgPack,
+            #[cfg(feature = "redis-support")]
             redis_url: None,
+            #[cfg(feature = "postgres-support")]
             postgres_url: None,
             msgpack_path: None,
             flush_interval: Some(5),
@@ -77,6 +82,7 @@ pub async fn create_driver_async(config: StorageConfig) -> Result<Arc<dyn Storag
             let driver = MsgPackDriver::new(&path, flush_interval)?;
             Ok(Arc::new(driver))
         }
+        #[cfg(feature = "redis-support")]
         StorageDriverType::Redis => {
             let url = config
                 .redis_url
@@ -86,6 +92,7 @@ pub async fn create_driver_async(config: StorageConfig) -> Result<Arc<dyn Storag
             let driver = RedisDriver::new(&url).await?;
             Ok(Arc::new(driver))
         }
+        #[cfg(feature = "postgres-support")]
         StorageDriverType::PostgreSQL => {
             let url = config
                 .postgres_url

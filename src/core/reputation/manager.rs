@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::models::{ReputationProviderConfig, ReputationProviderResult, UnifiedReputationScore};
+#[cfg(test)]
+use crate::core::models::ReputationProviderResult;
+use crate::core::models::{ReputationProviderConfig, UnifiedReputationScore};
 use crate::core::reputation::providers::{
     AbuseIPDBProvider, GreyNoiseProvider, IPInfoProvider, ReputationProvider, SpamhausProvider,
     VirusTotalProvider,
@@ -143,6 +145,7 @@ impl ReputationManager {
         }
     }
 
+    #[cfg(test)]
     pub async fn query_single(
         &self,
         provider_name: &str,
@@ -179,10 +182,12 @@ impl ReputationManager {
         }
     }
 
+    #[cfg(test)]
     pub fn provider_count(&self) -> usize {
         self.providers.len()
     }
 
+    #[cfg(test)]
     pub fn provider_names(&self) -> Vec<&str> {
         self.providers.iter().map(|p| p.name()).collect()
     }

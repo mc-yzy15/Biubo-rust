@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -27,6 +30,7 @@ pub struct UnifiedReputationScore {
     pub cached: bool,
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorMetric {
     pub metric_type: String,
@@ -34,6 +38,7 @@ pub struct BehaviorMetric {
     pub timestamp: DateTime<Utc>,
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorProfile {
     pub ip: String,
@@ -45,6 +50,7 @@ pub struct BehaviorProfile {
     pub metrics: Vec<BehaviorMetric>,
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorScoreBreakdown {
     pub velocity_score: f64,
@@ -53,6 +59,7 @@ pub struct BehaviorScoreBreakdown {
     pub session_consistency_score: f64,
 }
 
+#[cfg(feature = "behavior-profiling")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorScore {
     pub ip: String,

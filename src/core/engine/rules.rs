@@ -1,6 +1,9 @@
+#![allow(dead_code)]
+
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
+#[cfg(feature = "plugin-system")]
 use std::sync::Mutex;
 
 pub static RAW_RULES: &[(&str, &[&str])] = &[
@@ -235,10 +238,11 @@ pub static COMPILED_RULES: Lazy<HashMap<&'static str, Regex>> = Lazy::new(|| {
     compiled
 });
 
+#[cfg(feature = "plugin-system")]
+#[allow(dead_code)]
 static PLUGIN_RULE_CACHE: Lazy<Mutex<HashMap<String, (String, Regex)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-#[allow(dead_code)]
 pub fn check_rules(text: &str, compiled_rules: &HashMap<&str, Regex>) -> (bool, Vec<String>) {
     let mut matched = Vec::new();
     for (attack_type, pattern) in compiled_rules.iter() {
@@ -249,6 +253,8 @@ pub fn check_rules(text: &str, compiled_rules: &HashMap<&str, Regex>) -> (bool, 
     (!matched.is_empty(), matched)
 }
 
+#[cfg(feature = "plugin-system")]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn evaluate_plugin_rules(
     text: &str,
     plugin_rules: &HashMap<&str, Vec<&str>>,
@@ -292,6 +298,8 @@ pub fn evaluate_plugin_rules(
     matched
 }
 
+#[cfg(feature = "plugin-system")]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn check_rules_with_plugins(text: &str) -> (bool, Vec<String>) {
     let (_builtin_matched, builtin_types) = check_rules(text, &COMPILED_RULES);
 
@@ -437,6 +445,7 @@ mod tests {
         assert!(types.contains(&"sql_injection".to_string()));
     }
 
+    #[cfg(feature = "plugin-system")]
     #[test]
     fn test_evaluate_plugin_rules_empty() {
         let empty_rules = HashMap::new();
@@ -444,6 +453,7 @@ mod tests {
         assert!(matched.is_empty());
     }
 
+    #[cfg(feature = "plugin-system")]
     #[test]
     fn test_evaluate_plugin_rules_single_pattern() {
         let mut rules = HashMap::new();
@@ -453,6 +463,7 @@ mod tests {
         assert!(matched.contains(&"custom_xss".to_string()));
     }
 
+    #[cfg(feature = "plugin-system")]
     #[test]
     fn test_evaluate_plugin_rules_multiple_patterns() {
         let mut rules = HashMap::new();
@@ -462,6 +473,7 @@ mod tests {
         assert!(matched.contains(&"custom_sqli".to_string()));
     }
 
+    #[cfg(feature = "plugin-system")]
     #[test]
     fn test_evaluate_plugin_rules_no_match() {
         let mut rules = HashMap::new();
@@ -470,6 +482,7 @@ mod tests {
         assert!(matched.is_empty());
     }
 
+    #[cfg(feature = "plugin-system")]
     #[test]
     fn test_evaluate_plugin_rules_case_insensitive() {
         let mut rules = HashMap::new();
@@ -478,6 +491,7 @@ mod tests {
         assert!(!matched.is_empty());
     }
 
+    #[cfg(feature = "plugin-system")]
     #[test]
     fn test_evaluate_plugin_rules_multiple_attack_types() {
         let mut rules = HashMap::new();
@@ -489,6 +503,7 @@ mod tests {
         assert!(matched.contains(&"custom_sqli".to_string()));
     }
 
+    #[cfg(feature = "plugin-system")]
     #[test]
     fn test_check_rules_with_plugins_builtin_only() {
         let (is_malicious, types) = check_rules_with_plugins("<script>alert(1)</script>");
@@ -496,6 +511,7 @@ mod tests {
         assert!(types.contains(&"xss".to_string()));
     }
 
+    #[cfg(feature = "plugin-system")]
     #[test]
     fn test_check_rules_with_plugins_normal_request() {
         let (is_malicious, types) = check_rules_with_plugins("hello world");
@@ -503,6 +519,7 @@ mod tests {
         assert!(types.is_empty());
     }
 
+    #[cfg(feature = "plugin-system")]
     #[test]
     fn test_check_rules_with_plugins_deduplication() {
         let (is_malicious, types) = check_rules_with_plugins("<script>alert(1)</script>");

@@ -1,4 +1,5 @@
 use crate::api::app::AppState;
+use crate::utils::crypto::verify_password;
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -56,7 +57,7 @@ async fn api_login(
     axum::Json(payload): axum::Json<LoginRequest>,
 ) -> Response {
     let password = state.settings.read().dashboard_password.clone();
-    if payload.password == password {
+    if verify_password(&payload.password, &password) {
         Json(json!({"status": "success"})).into_response()
     } else {
         (

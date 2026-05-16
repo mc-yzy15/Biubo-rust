@@ -1,13 +1,24 @@
+#![allow(dead_code)]
+
+#[cfg(feature = "ssl-support")]
 use std::path::PathBuf;
+#[cfg(feature = "ssl-support")]
 use std::sync::Arc;
 
+#[cfg(feature = "ssl-support")]
 use rustls::ServerConfig;
+#[cfg(feature = "ssl-support")]
 use rustls_acme::caches::DirCache;
+#[cfg(feature = "ssl-support")]
 use rustls_acme::AcmeConfig;
+#[cfg(feature = "ssl-support")]
 use rustls_acme::AcmeState;
+#[cfg(feature = "ssl-support")]
 use tokio_rustls::TlsAcceptor;
+#[cfg(feature = "ssl-support")]
 use tracing::info;
 
+#[cfg(feature = "ssl-support")]
 pub fn build_tls_config_from_files(
     cert_path: &PathBuf,
     key_path: &PathBuf,
@@ -33,6 +44,7 @@ pub fn build_tls_config_from_files(
     Ok(config)
 }
 
+#[cfg(feature = "ssl-support")]
 pub fn build_acme_tls_config(
     domains: Vec<String>,
     email: String,
@@ -54,11 +66,13 @@ pub fn build_acme_tls_config(
     Ok((server_config, state))
 }
 
+#[cfg(feature = "ssl-support")]
 pub struct TlsConfig {
     pub server_config: ServerConfig,
     pub port: u16,
 }
 
+#[cfg(feature = "ssl-support")]
 impl TlsConfig {
     pub fn acceptor(&self) -> TlsAcceptor {
         TlsAcceptor::from(Arc::new(self.server_config.clone()))

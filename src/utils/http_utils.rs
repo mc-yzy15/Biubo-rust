@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::config::settings::IpHeaderConfig;
+use crate::utils::url_validator::is_ip_in_range;
 
 pub static STRIP_RESP_HEADERS: &[&str] = &[
     "connection",
@@ -33,6 +34,44 @@ pub fn get_client_ip(headers: &axum::http::HeaderMap, config: &IpHeaderConfig) -
         }
     }
     String::new()
+}
+
+pub fn get_client_ip_with_trust(
+    headers: &axum::http::HeaderMap,
+    config: &IpHeaderConfig,
+    remote_addr: &str,
+) -> String {
+    if !config.state {
+        return String::new();
+    }
+
+    let is_trusted = if config.trusted_proxies.is_empty() {
+        true
+    } else {
+        config
+            .trusted_proxies
+            .iter()
+            .any(|cidr| is_ip_in_range(remote_addr, cidr))
+    };
+
+    if !is_trusted {
+        return remote_addr.to_string();
+    }
+
+    for header_name in &config.order {
+        if let Some(value) = headers.get(header_name) {
+            if let Ok(v) = value.to_str() {
+                if header_name == "X-Forwarded-For" {
+                    if let Some(first) = v.split(',').next() {
+                        return first.trim().to_string();
+                    }
+                }
+                return v.to_string();
+            }
+        }
+    }
+
+    remote_addr.to_string()
 }
 
 pub fn is_static_resource(url: &str, extensions: &HashSet<String>) -> bool {
@@ -152,6 +191,7 @@ pub async fn get_geo_info(city: &str, country: &str) -> serde_json::Value {
     serde_json::json!({})
 }
 
+#[cfg(test)]
 pub async fn get_ip_reputation(ip: &str) -> bool {
     let url = format!("https://biubo.zplb.org.cn/api/ip/reputation?ip={}", ip);
     let client = reqwest::Client::new();

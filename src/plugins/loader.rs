@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 use crate::plugins::types::{PluginConfig, PluginInstance, PluginMetadata, PluginType};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -32,6 +34,7 @@ impl PluginLoader {
         self.last_scan.elapsed() >= self.watch_interval
     }
 
+    #[cfg(feature = "plugin-system")]
     pub fn scan_plugins(&mut self) -> Vec<PluginInstance> {
         self.last_scan = Instant::now();
         let mut plugins = Vec::new();
@@ -71,6 +74,7 @@ impl PluginLoader {
         plugins
     }
 
+    #[cfg(feature = "plugin-system")]
     fn load_plugin_file(&self, path: &Path) -> Result<PluginInstance, String> {
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read file: {}", e))?;
@@ -86,6 +90,7 @@ impl PluginLoader {
         Ok(plugin)
     }
 
+    #[cfg(feature = "plugin-system")]
     fn validate_plugin(&self, config: &PluginFileConfig) -> Result<(), String> {
         if config.metadata.name.is_empty() {
             return Err("Plugin name cannot be empty".to_string());

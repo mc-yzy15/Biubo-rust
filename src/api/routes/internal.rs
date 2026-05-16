@@ -13,8 +13,6 @@ use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 struct GreetingRequest {
-    #[allow(dead_code)]
-    ts: Option<String>,
     ip: Option<String>,
     visitor_id: Option<String>,
     browser_info: Option<Value>,
@@ -24,8 +22,6 @@ struct GreetingRequest {
 
 #[derive(Debug, Deserialize)]
 struct ScreenRequest {
-    #[allow(dead_code)]
-    ts: Option<String>,
     events: Option<Vec<Value>>,
     request_id: Option<String>,
     host: Option<String>,
@@ -35,8 +31,6 @@ struct ScreenRequest {
 struct SearchQuery {
     statement: Option<String>,
     host: Option<String>,
-    #[allow(dead_code)]
-    date: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,8 +59,6 @@ struct DateQuery {
 #[derive(Debug, Deserialize)]
 struct RrwebQuery {
     host: Option<String>,
-    #[allow(dead_code)]
-    date: Option<String>,
     id: Option<String>,
 }
 

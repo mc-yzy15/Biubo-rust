@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![doc = "Cluster management module for distributed WAF deployment"]
+
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -10,7 +13,9 @@ use uuid::Uuid;
 use crate::config::settings::SharedSettings;
 use crate::core::models::{ClusterNode, ClusterRole};
 
+#[cfg(feature = "cluster-mode")]
 pub mod sync;
+#[cfg(feature = "cluster-mode")]
 pub mod threat_share;
 
 const HEARTBEAT_INTERVAL_SECS: u64 = 10;
@@ -19,10 +24,15 @@ const DISCOVERY_PORT: u16 = 9527;
 const DISCOVERY_MAGIC: &[u8] = b"BIUBO";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[doc = "Represents the operational status of a cluster node"]
 pub enum ClusterStatus {
+    #[doc = "Node is initializing and not yet ready"]
     Initializing,
+    #[doc = "Node is running normally"]
     Running,
+    #[doc = "Node is running in degraded mode (e.g., primary unavailable)"]
     Degraded,
+    #[doc = "Node has been stopped"]
     Stopped,
 }
 
@@ -38,9 +48,13 @@ impl std::fmt::Display for ClusterStatus {
 }
 
 #[derive(Debug, Clone)]
-struct InternalNode {
+#[doc = "Internal representation of a cluster node with heartbeat tracking"]
+pub(crate) struct InternalNode {
+    #[doc = "The cluster node information"]
     pub node: ClusterNode,
+    #[doc = "Timestamp of the last received heartbeat"]
     pub last_heartbeat: DateTime<Utc>,
+    #[doc = "Timestamp when the node started"]
     pub startup_time: DateTime<Utc>,
 }
 
@@ -55,11 +69,17 @@ impl InternalNode {
     }
 }
 
+#[doc = "Cluster manager for coordinating distributed WAF nodes. Handles node registration, discovery, heartbeat monitoring, dead node detection, primary election, and failover."]
 pub struct ClusterManager {
+    #[doc = "Unique identifier for this node"]
     pub node_id: String,
+    #[doc = "Current role of this node (Primary, Secondary, or Worker)"]
     pub role: ClusterRole,
-    pub nodes: DashMap<String, InternalNode>,
+    #[doc = "Map of all known nodes in the cluster"]
+    pub(crate) nodes: DashMap<String, InternalNode>,
+    #[doc = "Current operational status of the cluster"]
     pub status: ClusterStatus,
+    #[doc = "Timestamp when this node started"]
     pub start_time: DateTime<Utc>,
     settings: SharedSettings,
     heartbeat_counter: Arc<AtomicU64>,
@@ -262,6 +282,7 @@ impl ClusterManager {
         }
     }
 
+    #[cfg(test)]
     pub fn receive_heartbeat(&self, node_id: String, role: ClusterRole, ip: String, uptime: u64) {
         if node_id == self.node_id {
             return;
@@ -681,12 +702,18 @@ mod tests {
         assert!(primary_node.is_some());
         assert_eq!(primary_node.unwrap(), "candidate-1".to_string());
 
-        if let Some(entry) = manager.nodes.get("candidate-1") {
-            assert!(matches!(entry.value().node.role, ClusterRole::Primary));
+        {
+            let entry = manager.nodes.get("candidate-1");
+            if let Some(e) = entry {
+                assert!(matches!(e.value().node.role, ClusterRole::Primary));
+            }
         }
 
-        if let Some(entry) = manager.nodes.get("candidate-2") {
-            assert!(matches!(entry.value().node.role, ClusterRole::Secondary));
+        {
+            let entry = manager.nodes.get("candidate-2");
+            if let Some(e) = entry {
+                assert!(matches!(e.value().node.role, ClusterRole::Secondary));
+            }
         }
     }
 
@@ -720,16 +747,22 @@ mod tests {
         let demoted = manager.demote_primary("primary-node".to_string());
         assert!(demoted);
 
-        if let Some(entry) = manager.nodes.get("primary-node") {
-            assert!(matches!(entry.value().node.role, ClusterRole::Secondary));
+        {
+            let entry = manager.nodes.get("primary-node");
+            if let Some(e) = entry {
+                assert!(matches!(e.value().node.role, ClusterRole::Secondary));
+            }
         }
 
         let new_primary = manager.promote_secondary();
         assert!(new_primary.is_some());
         assert_eq!(new_primary.unwrap(), "secondary-node".to_string());
 
-        if let Some(entry) = manager.nodes.get("secondary-node") {
-            assert!(matches!(entry.value().node.role, ClusterRole::Primary));
+        {
+            let entry = manager.nodes.get("secondary-node");
+            if let Some(e) = entry {
+                assert!(matches!(e.value().node.role, ClusterRole::Primary));
+            }
         }
     }
 
@@ -783,9 +816,13 @@ mod tests {
         let after_counter = manager.heartbeat_counter.load(Ordering::Relaxed);
         assert_eq!(after_counter, initial_counter + 1);
 
-        if let Some(entry) = manager.nodes.get(&manager.node_id) {
-            let uptime = entry.value().node.uptime_seconds;
-            assert!(uptime > 0 || uptime == 0);
+        {
+            let node_id = manager.node_id.clone();
+            let entry = manager.nodes.get(&node_id);
+            if let Some(e) = entry {
+                let uptime = e.value().node.uptime_seconds;
+                assert!(uptime > 0 || uptime == 0);
+            }
         }
     }
 
@@ -818,9 +855,12 @@ mod tests {
 
         assert!(manager.get_node_count() >= 2);
 
-        if let Some(entry) = manager.nodes.get("remote-node") {
-            assert_eq!(entry.value().node.ip, "10.0.0.1");
-            assert!(matches!(entry.value().node.role, ClusterRole::Worker));
+        {
+            let entry = manager.nodes.get("remote-node");
+            if let Some(e) = entry {
+                assert_eq!(e.value().node.ip, "10.0.0.1");
+                assert!(matches!(e.value().node.role, ClusterRole::Worker));
+            }
         }
     }
 

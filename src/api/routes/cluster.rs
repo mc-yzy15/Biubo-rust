@@ -1,3 +1,5 @@
+#![cfg(feature = "cluster-mode")]
+
 use crate::cluster::sync::{ConfigSync, ConfigUpdate};
 use crate::cluster::threat_share::ThreatIntelligenceShare;
 use axum::extract::State;

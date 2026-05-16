@@ -1,3 +1,6 @@
+#![cfg(feature = "cluster-mode")]
+#![allow(dead_code)]
+
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -12,6 +15,7 @@ const MAX_RETRY_COUNT: u8 = 3;
 const CLUSTER_SYNC_CHANNEL: &str = "biubo:cluster:config_sync";
 const HTTP_SYNC_TIMEOUT_SECS: u64 = 10;
 
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConfigUpdateType {
     #[serde(rename = "rules")]
@@ -46,6 +50,7 @@ pub struct ConfigUpdate {
 }
 
 impl ConfigUpdate {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new(update_type: ConfigUpdateType, payload: String, source_node_id: String) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -88,8 +93,11 @@ pub struct ConfigSyncResponse {
 pub struct ConfigSync {
     pub manager: Arc<ClusterManager>,
     pub settings: SharedSettings,
+    #[cfg(feature = "redis-support")]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub redis_client: Option<redis::aio::ConnectionManager>,
     pub pending_acks: DashMap<String, ConfigUpdateAck>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub http_client: reqwest::Client,
 }
 
@@ -98,6 +106,7 @@ impl ConfigSync {
         Self {
             manager,
             settings,
+            #[cfg(feature = "redis-support")]
             redis_client: None,
             pending_acks: DashMap::new(),
             http_client: reqwest::Client::builder()
@@ -107,6 +116,7 @@ impl ConfigSync {
         }
     }
 
+    #[cfg(feature = "redis-support")]
     pub async fn with_redis(&mut self, redis_url: &str) -> bool {
         match redis::Client::open(redis_url) {
             Ok(client) => match client.get_connection_manager().await {
@@ -146,6 +156,7 @@ impl ConfigSync {
             self.pending_acks.insert(update.id.clone(), ack);
         }
 
+        #[cfg(feature = "redis-support")]
         if self.redis_client.is_some() {
             match self.broadcast_via_redis(&update).await {
                 Ok(_) => {
@@ -160,6 +171,11 @@ impl ConfigSync {
             tracing::info!("[ConfigSync] Broadcasting via HTTP to {} nodes", target_nodes.len());
             self.broadcast_via_http(&update, &target_nodes).await;
         }
+        #[cfg(not(feature = "redis-support"))]
+        {
+            tracing::info!("[ConfigSync] Broadcasting via HTTP to {} nodes", target_nodes.len());
+            self.broadcast_via_http(&update, &target_nodes).await;
+        }
 
         self.start_ack_monitor(&update.id).await;
 
@@ -171,6 +187,7 @@ impl ConfigSync {
         Ok(acked_count)
     }
 
+    #[cfg(feature = "redis-support")]
     async fn broadcast_via_redis(&self, update: &ConfigUpdate) -> Result<(), String> {
         let redis_client = self.redis_client
             .as_ref()
@@ -529,6 +546,7 @@ mod tests {
         let manager = Arc::new(ClusterManager::new(settings.clone()));
         let sync = ConfigSync::new(manager.clone(), settings.clone());
 
+        #[cfg(feature = "redis-support")]
         assert!(sync.redis_client.is_none());
         assert_eq!(sync.pending_acks.len(), 0);
         assert_eq!(sync.get_pending_ack_count(), 0);
@@ -747,6 +765,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "redis-support")]
     #[tokio::test]
     async fn test_fallback_from_redis_to_http() {
         let settings = create_test_settings();

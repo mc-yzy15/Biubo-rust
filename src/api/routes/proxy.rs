@@ -194,7 +194,7 @@ async fn reverse_proxy(
                 &challenge_secret,
             );
             match status {
-                ChallengeStatus::Invalid => {
+                ChallengeStatus::Invalid | ChallengeStatus::Replayed => {
                     let db = get_db(&host);
                     let _ = db.ban_ip(&client_ip, "forged_challenge_token", None).await;
                     return build_forbidden_response(&state, "403");
@@ -303,7 +303,6 @@ async fn reverse_proxy(
                 cookies: cookies.clone(),
                 body: decoded_body.clone(),
                 args: args_map.clone(),
-                client_ip: client_ip.clone(),
             };
 
             let queue = state.async_detection_queue.as_ref().unwrap();

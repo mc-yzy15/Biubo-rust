@@ -17,35 +17,10 @@ pub struct CertificateState {
     pub renewed: bool,
 }
 
-pub struct Http01ChallengeHandler {
-    pub challenges: Arc<RwLock<HashMap<String, String>>>,
-}
-
-impl Http01ChallengeHandler {
-    pub fn new() -> Self {
-        Self {
-            challenges: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    pub fn set_challenge(&self, token: String, proof: String) {
-        self.challenges.write().insert(token, proof);
-    }
-
-    pub fn get_challenge(&self, token: &str) -> Option<String> {
-        self.challenges.read().get(token).cloned()
-    }
-
-    pub fn clear_challenge(&self, token: &str) {
-        self.challenges.write().remove(token);
-    }
-}
-
 pub struct SslManager {
     pub domains: Vec<String>,
     pub email: String,
     pub cert_dir: PathBuf,
-    pub challenge_handler: Arc<Http01ChallengeHandler>,
     pub server_config: Arc<RwLock<Option<rustls::ServerConfig>>>,
     pub certificate_states: HashMap<String, CertificateState>,
 }
@@ -56,12 +31,12 @@ impl SslManager {
             domains: domains.clone(),
             email,
             cert_dir,
-            challenge_handler: Arc::new(Http01ChallengeHandler::new()),
             server_config: Arc::new(RwLock::new(None)),
             certificate_states: HashMap::new(),
         }
     }
 
+    #[cfg(feature = "ssl-support")]
     pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         fs::create_dir_all(&self.cert_dir).await?;
 
@@ -116,6 +91,8 @@ impl SslManager {
         Ok(())
     }
 
+    #[cfg(feature = "ssl-support")]
+    #[cfg_attr(not(test), allow(dead_code))]
     async fn save_certificate_states(
         &self,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

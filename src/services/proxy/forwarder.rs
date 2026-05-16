@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::config::settings::Settings;
 use crate::utils::http_utils::STRIP_RESP_HEADERS;
+use crate::utils::url_validator::{is_safe_target, validate_target_url, UrlValidationResult};
 
 static HTTP_CLIENT: once_cell::sync::Lazy<Result<reqwest::Client, String>> =
     once_cell::sync::Lazy::new(|| {
@@ -53,6 +54,19 @@ pub async fn forward_request(
         path_segment,
         query_string.map(|q| format!("?{}", q)).unwrap_or_default()
     );
+
+    if !is_safe_target(&target_url) {
+        let reason = match validate_target_url(&target_url) {
+            UrlValidationResult::PrivateIp => "private IP address".to_string(),
+            UrlValidationResult::Localhost => "localhost".to_string(),
+            UrlValidationResult::LinkLocal => "link-local address".to_string(),
+            UrlValidationResult::Reserved => "reserved address".to_string(),
+            UrlValidationResult::InvalidUrl => "invalid URL".to_string(),
+            UrlValidationResult::Valid => unreachable!(),
+        };
+        tracing::warn!("SSRF attempt blocked: {} -> {}", target_url, reason);
+        return Err(format!("SSRF attempt detected: target URL resolves to {}", reason).into());
+    }
 
     let mut req_headers = headers.clone();
 

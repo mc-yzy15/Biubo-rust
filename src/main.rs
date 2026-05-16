@@ -1,20 +1,28 @@
+#![allow(unused_imports)]
+
 use crate::api::app::create_app_with_async_detection;
 use crate::config::settings::{Settings, SharedSettings};
 use crate::core::engine::async_detection_queue::start_async_detection_workers;
-use crate::services::ssl::SslManager;
-use axum::response::Redirect;
 use axum::routing::get;
 use axum::Router;
 use std::sync::Arc;
-use tokio_rustls::server::TlsStream;
-use tokio_rustls::TlsAcceptor;
 use tracing_subscriber::EnvFilter;
+
+#[cfg(feature = "ssl-support")]
+use crate::services::ssl::SslManager;
+#[cfg(feature = "ssl-support")]
+use axum::response::Redirect;
+#[cfg(feature = "ssl-support")]
+use tokio_rustls::server::TlsStream;
+#[cfg(feature = "ssl-support")]
+use tokio_rustls::TlsAcceptor;
 
 mod api;
 mod cluster;
 mod config;
 mod core;
 mod data;
+mod error;
 mod plugins;
 mod services;
 mod utils;
@@ -29,15 +37,27 @@ async fn main() {
 
     tracing::info!("Starting Biubo WAF Protective Proxy (Rust Edition)...");
 
+    #[cfg(feature = "plugin-system")]
     plugins::init_plugins();
 
-    let settings: SharedSettings = Arc::new(parking_lot::RwLock::new(Settings::load()));
+    let settings: SharedSettings = match Settings::load_and_validate() {
+        Ok(s) => Arc::new(parking_lot::RwLock::new(s)),
+        Err(e) => {
+            tracing::error!("Configuration validation failed: {}", e);
+            std::process::exit(1);
+        }
+    };
     let port = settings.read().waf_port;
 
+    #[cfg(feature = "ssl-support")]
     let ssl_enabled = settings.read().ssl_enabled;
+    #[cfg(feature = "ssl-support")]
     let ssl_port = settings.read().ssl_port;
+    #[cfg(feature = "ssl-support")]
     let ssl_domains = settings.read().ssl_domains.clone();
+    #[cfg(feature = "ssl-support")]
     let ssl_acme_email = settings.read().ssl_acme_email.clone();
+    #[cfg(feature = "ssl-support")]
     let ssl_cert_dir = settings.read().ssl_cert_dir.clone();
 
     let session_timeout = settings.read().session_timeout as u64;
@@ -67,6 +87,7 @@ async fn main() {
 
     let app = create_app_with_async_detection(settings.clone(), async_detection_queue);
 
+    #[cfg(feature = "ssl-support")]
     if ssl_enabled && !ssl_domains.is_empty() && !ssl_acme_email.is_empty() {
         tracing::info!("HTTPS mode enabled on port {}", ssl_port);
 
@@ -167,17 +188,48 @@ async fn main() {
             tracing::error!("Server error: {}", e);
         }
     }
+
+    #[cfg(not(feature = "ssl-support"))]
+    {
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        tracing::info!("Serving on host 0.0.0.0, port {}...", port);
+
+        let listener = match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::error!("Failed to bind to {}: {}", addr, e);
+                std::process::exit(1);
+            }
+        };
+
+        if let Err(e) = axum::serve(listener, app).await {
+            tracing::error!("Server error: {}", e);
+        }
+    }
 }
 
-async fn https_redirect_handler() -> impl axum::response::IntoResponse {
-    Redirect::permanent("https://localhost")
+#[cfg(feature = "ssl-support")]
+async fn https_redirect_handler(req: axum::extract::Request) -> impl axum::response::IntoResponse {
+    let host = req
+        .headers()
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost");
+    let path = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+    Redirect::permanent(&format!("https://{}{}", host, path))
 }
 
+#[cfg(feature = "ssl-support")]
 struct TlsListenerWrapper {
     tls_stream: Option<TlsStream<tokio::net::TcpStream>>,
     peer_addr: std::net::SocketAddr,
 }
 
+#[cfg(feature = "ssl-support")]
 impl axum::serve::Listener for TlsListenerWrapper {
     type Io = TlsStream<tokio::net::TcpStream>;
     type Addr = std::net::SocketAddr;

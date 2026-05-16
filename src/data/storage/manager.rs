@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -8,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::settings::Settings;
 use crate::data::storage::base::Database;
 
+#[cfg(feature = "plugin-system")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct BanRecord {
     pub reason: String,
     pub expire: Option<u32>,
@@ -18,7 +21,7 @@ pub struct BanRecord {
     pub city: String,
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "plugin-system")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhitelistRecord {
     pub remark: String,
@@ -143,6 +146,7 @@ impl ProxyDB {
     }
 
     pub fn write_log(&self, entry: serde_json::Value) {
+        #[cfg(feature = "plugin-system")]
         let entry_for_exporter = entry.clone();
         let should_export = {
             let _guard = self.lock.lock();
@@ -180,6 +184,7 @@ impl ProxyDB {
         };
 
         if should_export {
+            #[cfg(feature = "plugin-system")]
             tokio::spawn(async move {
                 crate::plugins::trigger_exporters(entry_for_exporter).await;
             });

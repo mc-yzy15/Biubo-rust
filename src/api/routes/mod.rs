@@ -1,3 +1,4 @@
+#[cfg(feature = "cluster-mode")]
 pub mod cluster;
 pub mod dashboard;
 pub mod init;
