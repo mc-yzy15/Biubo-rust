@@ -397,13 +397,42 @@ jobs:
           ZIG_VERSION="0.13.0"
           curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
             | tar xJ -C /opt
-          ln -sf /opt/zig-linux-x86_64-${ZIG_VERSION}/zig /usr/local/bin/zig
-          /opt/zig-linux-x86_64-${ZIG_VERSION}/zig version
-          echo "ZIG_INSTALL_DIR=/opt/zig-linux-x86_64-${ZIG_VERSION}" >> $GITHUB_ENV
-          echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_MUSL_LINKER=/opt/zig-linux-x86_64-${ZIG_VERSION}/zig" >> $GITHUB_ENV
-          echo "CC_loongarch64_unknown_linux_musl=/opt/zig-linux-x86_64-${ZIG_VERSION}/zig cc -target loongarch64-linux-musl" >> $GITHUB_ENV
-          echo "CXX_loongarch64_unknown_linux_musl=/opt/zig-linux-x86_64-${ZIG_VERSION}/zig c++ -target loongarch64-linux-musl" >> $GITHUB_ENV
-          echo "AR_loongarch64_unknown_linux_musl=/opt/zig-linux-x86_64-${ZIG_VERSION}/zig ar" >> $GITHUB_ENV
+          ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
+          echo "ZIG_INSTALL_DIR=${ZIG_DIR}" >> $GITHUB_ENV
+          cat > /usr/local/bin/loongarch64-cc << 'EOF'
+#!/bin/bash
+ZIG="/opt/zig-linux-x86_64-0.13.0/zig"
+ARGS=()
+for arg in "$@"; do
+  if [[ "$arg" != --target=* ]]; then
+    ARGS+=("$arg")
+  fi
+done
+exec "$ZIG" cc -target loongarch64-linux-musl "${ARGS[@]}"
+EOF
+          chmod +x /usr/local/bin/loongarch64-cc
+          cat > /usr/local/bin/loongarch64-cxx << 'EOF'
+#!/bin/bash
+ZIG="/opt/zig-linux-x86_64-0.13.0/zig"
+ARGS=()
+for arg in "$@"; do
+  if [[ "$arg" != --target=* ]]; then
+    ARGS+=("$arg")
+  fi
+done
+exec "$ZIG" c++ -target loongarch64-linux-musl "${ARGS[@]}"
+EOF
+          chmod +x /usr/local/bin/loongarch64-cxx
+          cat > /usr/local/bin/loongarch64-ar << 'EOF'
+#!/bin/bash
+exec /opt/zig-linux-x86_64-0.13.0/zig ar "$@"
+EOF
+          chmod +x /usr/local/bin/loongarch64-ar
+          ${ZIG_DIR}/zig version
+          echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_MUSL_LINKER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
+          echo "CC_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
+          echo "CXX_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
+          echo "AR_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-ar" >> $GITHUB_ENV
 
       - name: Install packaging tools
         run: |
