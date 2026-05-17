@@ -398,23 +398,32 @@ jobs:
           curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
             | tar xJ -C /opt
           ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
+          ZIG_SYSROOT="$(${ZIG_DIR}/zig env | grep 'global_cache_dir' | cut -d'"' -f4)"
           echo '#!/bin/bash' > /usr/local/bin/loongarch64-cc
-          echo '# LoongArch64 wrapper for Zig CC - filters incompatible GCC flags' >> /usr/local/bin/loongarch64-cc
-          echo 'ZIG="'"$ZIG_DIR"'/zig"' >> /usr/local/bin/loongarch64-cc
+          echo "ZIG=\"${ZIG_DIR}/zig\"" >> /usr/local/bin/loongarch64-cc
           echo 'ARGS=()' >> /usr/local/bin/loongarch64-cc
           echo 'for arg in "$@"; do' >> /usr/local/bin/loongarch64-cc
-          echo '  case "$arg" in' >> /usr/local/bin/loongarch64-cc
-          echo '    --target=*|--param*|-pedantic|-Wno-*|-fstack-protector*|-fno-omit-frame-pointer|-ffunction-sections|-fdata-sections|-fPIC|-fPIE|-fno-plt|-fno-pic|-fno-pie)' >> /usr/local/bin/loongarch64-cc
-          echo '      ;;' >> /usr/local/bin/loongarch64-cc
-          echo '    *) ARGS+=("$arg") ;;' >> /usr/local/bin/loongarch64-cc
-          echo '  esac' >> /usr/local/bin/loongarch64-cc
+          echo '  SKIP=0' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ "$arg" == --target=* ]] && SKIP=1' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ "$arg" == --param* ]] && SKIP=1' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ "$arg" == -pedantic ]] && SKIP=1' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ "$arg" == -Wno-* ]] && SKIP=1' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ "$arg" == -fstack-protector* ]] && SKIP=1' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ "$arg" == -fno-omit-frame-pointer ]] && SKIP=1' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ "$arg" == -ffunction-sections ]] && SKIP=1' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ "$arg" == -fdata-sections ]] && SKIP=1' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ "$arg" == -fPIC || "$arg" == -fPIE || "$arg" == -fno-plt || "$arg" == -fno-pic || "$arg" == -fno-pie ]] && SKIP=1' >> /usr/local/bin/loongarch64-cc
+          echo '  [[ $SKIP -eq 0 ]] && ARGS+=("$arg")' >> /usr/local/bin/loongarch64-cc
           echo 'done' >> /usr/local/bin/loongarch64-cc
-          echo 'exec "$ZIG" cc -target loongarch64-linux-gnu "${ARGS[@]}"' >> /usr/local/bin/loongarch64-cc
+          echo "exec \"\$ZIG\" cc -target loongarch64-linux-gnu -isystem \"\${ZIG_DIR}/lib\" \"\${ARGS[@]}\"" >> /usr/local/bin/loongarch64-cc
           sed 's/cc/c++/g; s/CC/CXX/g; s/Zig CC/Zig C++/' /usr/local/bin/loongarch64-cc > /usr/local/bin/loongarch64-cxx
           printf '#!/bin/bash\nexec %s/zig ar "$@"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-ar
           chmod +x /usr/local/bin/loongarch64-cc /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
           ${ZIG_DIR}/zig version
-          head -5 /usr/local/bin/loongarch64-cc
+          echo "--- Wrapper script content ---"
+          cat /usr/local/bin/loongarch64-cc
+          echo "--- Test compile ---"
+          echo 'int main(){return 0;}' | /usr/local/bin/loongarch64-cc -x c - -o /dev/null 2>&1 || true
           echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_GNU_LINKER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
           echo "CC_loongarch64_unknown_linux_gnu=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
           echo "CXX_loongarch64_unknown_linux_gnu=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
