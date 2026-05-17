@@ -398,20 +398,59 @@ jobs:
           curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
             | tar xJ -C /opt
           ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
-          printf '#!/bin/bash\nZIG="%s/zig"\nARGS=()\nfor a in "$@"; do\n  case "$a" in\n    --target=*|--param*|-pedantic|-Wno-*|-fstack-protector*|-fno-omit-frame-pointer|-ffunction-sections|-fdata-sections|-fPIC|-fPIE|-fno-plt|-fno-pic|-fno-pie|-Werror|-Wall|-Wextra|-Wconversion|-Wshadow|-Wcast-align|-Wmissing-field-initializers|-Wswitch-enum|-fwrapv|-fvisibility=hidden) ;;\n    *) ARGS+=("$a") ;;\n  esac\ndone\nexec "$ZIG" cc -target loongarch64-linux-musl "${ARGS[@]}"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-cc
+          
+          cat > /usr/local/bin/loongarch64-cc << 'WRAPPER_EOF'
+          #!/bin/bash
+          ZIG="${ZIG_DIR:-/opt/zig-linux-x86_64-0.12.0}/zig"
+          ARGS=()
+          for a in "$@"; do
+            case "$a" in
+              --target=*|--param*|-pedantic \
+              |-W*|-w \
+              |-fstack-protector*|-fno-omit-frame-pointer \
+              |-ffunction-sections|-fdata-sections \
+              |-fPIC|-fPIE|-fno-pic|-fno-pie|-fno-plt \
+              |-fwrapv|-fvisibility=* \
+              |-fno-exceptions|-fno-rtti \
+              |-fmath-errno|-frounding-math|-ftrapping-math \
+              |-fsigned-char|-funsigned-char \
+              |-fcommon|-fno-common \
+              |-fshort-wchar|-fno-short-wchar \
+              |-falign-functions*|-fno-align-functions* \
+              |-frecip*|-fno-recip* \
+              |-march=*|-mtune=*|-mcpu=*|-mabi=*|-mfloat-abi*|-mthumb \
+              |--sysroot=*|-isysroot=* \
+              |-pipe \
+              |-O*|-g*|-s \
+              |-DOPENSSL_NO_ASM) ;;
+              *) ARGS+=("$a") ;;
+            esac
+          done
+          exec "$ZIG" cc -target loongarch64-linux-musl "${ARGS[@]}"
+          WRAPPER_EOF
+          
           sed 's/cc/c++/g; s/CC/CXX/g' /usr/local/bin/loongarch64-cc > /usr/local/bin/loongarch64-cxx
           printf '#!/bin/bash\nexec %s/zig ar "$@"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-ar
           chmod +x /usr/local/bin/loongarch64-cc /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
+          
+          export ZIG_DIR
           ${ZIG_DIR}/zig version
-          echo "--- Wrapper ---"
+          echo "--- Wrapper script ---"
           cat /usr/local/bin/loongarch64-cc
-          echo "--- Test ---"
+          echo "--- Test compilation ---"
           echo 'int main(){return 0;}' | /usr/local/bin/loongarch64-cc -x c - -o /tmp/test-loongarch64 2>&1
+          echo "Exit code: $?"
+          echo "--- Environment variables set ---"
           echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_MUSL_LINKER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
           echo "CC_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
           echo "CXX_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
           echo "AR_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-ar" >> $GITHUB_ENV
-        run: sudo apt-get update && sudo apt-get install -y rpm && cargo install cargo-deb --locked && cargo install cargo-generate-rpm --locked
+          echo "CMAKE_C_COMPILER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y rpm && cargo install cargo-deb --locked && cargo install cargo-generate-rpm --locked
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
