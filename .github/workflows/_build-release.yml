@@ -401,7 +401,7 @@ jobs:
           FROM debian:bookworm-slim
           RUN dpkg --add-architecture loongarch64 && \
               echo "deb [arch=amd64] http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list && \
-              echo "deb http://deb.debian.org/debian-ports unstable main" > /etc/apt/sources.list.d/ports.list && \
+              echo "deb [trusted=yes] http://deb.debian.org/debian-ports unstable main" > /etc/apt/sources.list.d/ports.list && \
               apt-get update && \
               apt-get install -y --no-install-recommends \
                 gcc-loongarch64-linux-gnu \
