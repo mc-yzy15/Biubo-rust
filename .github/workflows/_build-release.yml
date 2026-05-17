@@ -398,11 +398,23 @@ jobs:
           curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
             | tar xJ -C /opt
           ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
-          echo 'IyEvdXNyYmluL2Jhc2gKIyAgTG9vbmdBcmNoNjQgd3JhcHBlciBmb3IgWmlnIENDIGNyb3NzLWNvbXBpbGVyCiNaSUc9Ii9vcHQvemlnLWxpbnV4LTY0XzAtMTMuMC96aWciCkFSR1M9KCkKZm9yIGFyZyAiaCI7IGRvCiAga2FzZSAiJGFyZyIgaW4gLS10YXJnZXQ9KiAtLXRhcmdldD0qOyB0aGVuCiAgICBjb250aW51ZQogIGVsaWYgWyAiJGFyZyIgPSAiLS1wYXJhbSIgXTsgdGhlbgogICAgQVJHUys9KCIkYXJnIiAiJEFSR1NbI0BARUdTXS0xFTkdUSCsjMSkpCiAgZWxpZiBbICIkYXJnIiA9ICItc3NwLWJ1ZmZlci1zaXplIiBdOyB0aGVuCiAgICBjb250aW51ZQogIGVsc2UKICAgIEFSR1MrPSgiJGFyZyIpCiAgZmlkCmRvbmUKZXhlYyAiJFpJRyIgY2MgLXRhcmdldCBsb29uZ2FyY2g2NC1saW51eC1nbnUgIiR7QVJHU1tAXX0i' | base64 -d > /usr/local/bin/loongarch64-cc
-          echo 'IyEvdXNyYmluL2Jhc2gKIyAgTG9vbmdBcmNoNjQgd3JhcHBlciBmb3IgWmlnIENDKyBjcm9zcy1jb21waWxlcgoKWklHPSIvb3B0L3ppZy1saW51eC02NF8wLTEzLjAvemlnIgpBUkdTPSgpCmZvciBhcmcgaCI7IGRvCiAga2FzZSAiJGFyZyIgaW4gLS10YXJnZXQ9KiAtLXRhcmdldD0qOyB0aGVuCiAgICBjb250aW51ZQogIGVsaWYgWyAiJGFyZyIgPSAiLS1wYXJhbSIgXTsgdGhlbgogICAgQVJHUys9KCIkYXJnIiAiJEFSR1NbI0BARUdTXS0xFTkdUSCsjMSkpCiAgZWxpZiBbICIkYXJnIiA9ICItc3NwLWJ1ZmZlci1zaXplIiBdOyB0aGVuCiAgICBjb250aW51ZQogIGVsc2UKICAgIEFSR1MrPSgiJGFyZyIpCiAgZmlkCmRvbmUKZXhlYyAiJFpZRkiIGMrKyAudGFyZ2V0IGxvb25nYXJjaDY0LWxpbnV4LWdudSAiJHtBUkdTW0BdfSI=' | base64 -d > /usr/local/bin/loongarch64-cxx
-          echo 'IyEvdXNyYmluL2Jhc2gKZXhlYyAib3B0L3ppZy1saW51eC02NF8wLTEzLjAvemlnIiBhciAkQApkb25l' | base64 -d > /usr/local/bin/loongarch64-ar
+          echo '#!/bin/bash' > /usr/local/bin/loongarch64-cc
+          echo '# LoongArch64 wrapper for Zig CC - filters incompatible GCC flags' >> /usr/local/bin/loongarch64-cc
+          echo 'ZIG="'"$ZIG_DIR"'/zig"' >> /usr/local/bin/loongarch64-cc
+          echo 'ARGS=()' >> /usr/local/bin/loongarch64-cc
+          echo 'for arg in "$@"; do' >> /usr/local/bin/loongarch64-cc
+          echo '  case "$arg" in' >> /usr/local/bin/loongarch64-cc
+          echo '    --target=*|--param*|-pedantic|-Wno-*|-fstack-protector*|-fno-omit-frame-pointer|-ffunction-sections|-fdata-sections|-fPIC|-fPIE|-fno-plt|-fno-pic|-fno-pie)' >> /usr/local/bin/loongarch64-cc
+          echo '      ;;' >> /usr/local/bin/loongarch64-cc
+          echo '    *) ARGS+=("$arg") ;;' >> /usr/local/bin/loongarch64-cc
+          echo '  esac' >> /usr/local/bin/loongarch64-cc
+          echo 'done' >> /usr/local/bin/loongarch64-cc
+          echo 'exec "$ZIG" cc -target loongarch64-linux-gnu "${ARGS[@]}"' >> /usr/local/bin/loongarch64-cc
+          sed 's/cc/c++/g; s/CC/CXX/g; s/Zig CC/Zig C++/' /usr/local/bin/loongarch64-cc > /usr/local/bin/loongarch64-cxx
+          printf '#!/bin/bash\nexec %s/zig ar "$@"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-ar
           chmod +x /usr/local/bin/loongarch64-cc /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
           ${ZIG_DIR}/zig version
+          head -5 /usr/local/bin/loongarch64-cc
           echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_GNU_LINKER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
           echo "CC_loongarch64_unknown_linux_gnu=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
           echo "CXX_loongarch64_unknown_linux_gnu=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
