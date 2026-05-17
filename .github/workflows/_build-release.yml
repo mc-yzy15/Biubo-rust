@@ -380,7 +380,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: loongarch64-unknown-linux-gnu
+          - target: loongarch64-unknown-linux-musl
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -392,36 +392,25 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-rs
-        run: cargo install cross --locked
-
-      - name: Build LoongArch64 cross-compilation Docker image
+      - name: Install Zig as cross-compiler for C dependencies
         run: |
-          cat > Dockerfile.loongarch64 << 'DOCKERFILE'
-          FROM ubuntu:24.04
-          ENV DEBIAN_FRONTEND=noninteractive
-          RUN apt-get update && apt-get install -y --no-install-recommends \
-            git cmake gcc g++ make python3 wget ca-certificates pkg-config \
-            libc6-dev libssl-dev linux-libc-dev && \
-            rm -rf /var/lib/apt/lists/*
-          RUN git clone --depth=1 https://github.com/loongson/build-tools.git /tmp/build-tools && \
-              cd /tmp/build-tools && \
-              ./configure --prefix=/opt/loongarch64 --target=loongarch64-unknown-linux-gnu && \
-              make -j$(nproc) && \
-              make install && \
-              rm -rf /tmp/build-tools
-          ENV PATH="/opt/loongarch64/bin:${PATH}"
-          DOCKERFILE
-          docker build -t loongarch64-cross:latest -f Dockerfile.loongarch64 .
-
-      - name: Configure cross for LoongArch64
-        run: |
-          cat > Cross.toml << 'CROSSTOML'
-          [target.loongarch64-unknown-linux-gnu]
-          image = "loongarch64-cross:latest"
-          CROSSTOML
-
-      - name: Install packaging tools
+          ZIG_VERSION="0.12.0"
+          curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+            | tar xJ -C /opt
+          ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
+          printf '#!/bin/bash\nZIG="%s/zig"\nARGS=()\nfor a in "$@"; do\n  case "$a" in\n    --target=*|--param*|-pedantic|-Wno-*|-fstack-protector*|-fno-omit-frame-pointer|-ffunction-sections|-fdata-sections|-fPIC|-fPIE|-fno-plt|-fno-pic|-fno-pie|-Werror|-Wall|-Wextra|-Wconversion|-Wshadow|-Wcast-align|-Wmissing-field-initializers|-Wswitch-enum|-fwrapv|-fvisibility=hidden) ;;\n    *) ARGS+=("$a") ;;\n  esac\ndone\nexec "$ZIG" cc -target loongarch64-linux-musl "${ARGS[@]}"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-cc
+          sed 's/cc/c++/g; s/CC/CXX/g' /usr/local/bin/loongarch64-cc > /usr/local/bin/loongarch64-cxx
+          printf '#!/bin/bash\nexec %s/zig ar "$@"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-ar
+          chmod +x /usr/local/bin/loongarch64-cc /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
+          ${ZIG_DIR}/zig version
+          echo "--- Wrapper ---"
+          cat /usr/local/bin/loongarch64-cc
+          echo "--- Test ---"
+          echo 'int main(){return 0;}' | /usr/local/bin/loongarch64-cc -x c - -o /tmp/test-loongarch64 2>&1
+          echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_MUSL_LINKER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
+          echo "CC_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
+          echo "CXX_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
+          echo "AR_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-ar" >> $GITHUB_ENV
         run: sudo apt-get update && sudo apt-get install -y rpm && cargo install cargo-deb --locked && cargo install cargo-generate-rpm --locked
 
       - name: Cache Cargo registry
@@ -440,8 +429,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-index-
 
-      - name: Build release binary (LoongArch64 via cross-rs)
-        run: cross build --release --target ${{ matrix.target }}
+      - name: Build release binary (LoongArch64 via Zig 0.12)
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Create TAR.GZ archive
         shell: bash
