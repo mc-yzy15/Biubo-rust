@@ -380,7 +380,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: loongarch64-unknown-linux-musl
+          - target: loongarch64-unknown-linux-gnu
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -398,14 +398,19 @@ jobs:
       - name: Build LoongArch64 cross-compilation Docker image
         run: |
           cat > Dockerfile.loongarch64 << 'DOCKERFILE'
-          FROM alpine:3.19
-          RUN apk add --no-cache \
-            cross-loongarch64-unknown-linux-musl \
-            gcc-g++ \
-            musl-dev \
-            pkgconfig \
-            openssl-dev \
-            ca-certificates
+          FROM ubuntu:24.04
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+            git cmake gcc g++ make python3 wget ca-certificates pkg-config \
+            libc6-dev libssl-dev linux-libc-dev && \
+            rm -rf /var/lib/apt/lists/*
+          RUN git clone --depth=1 https://github.com/loongson/build-tools.git /tmp/build-tools && \
+              cd /tmp/build-tools && \
+              ./configure --prefix=/opt/loongarch64 --target=loongarch64-unknown-linux-gnu && \
+              make -j$(nproc) && \
+              make install && \
+              rm -rf /tmp/build-tools
+          ENV PATH="/opt/loongarch64/bin:${PATH}"
           DOCKERFILE
           docker build -t loongarch64-cross:latest -f Dockerfile.loongarch64 .
 
