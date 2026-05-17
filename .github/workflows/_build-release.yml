@@ -380,7 +380,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: loongarch64-unknown-linux-gnu
+          - target: loongarch64-unknown-linux-musl
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -398,19 +398,14 @@ jobs:
       - name: Build LoongArch64 cross-compilation Docker image
         run: |
           cat > Dockerfile.loongarch64 << 'DOCKERFILE'
-          FROM debian:bookworm-slim
-          RUN dpkg --add-architecture loongarch64 && \
-              echo "deb [arch=amd64] http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list && \
-              echo "deb [trusted=yes] http://deb.debian.org/debian-ports unstable main" > /etc/apt/sources.list.d/ports.list && \
-              apt-get update && \
-              apt-get install -y --no-install-recommends \
-                gcc-loongarch64-linux-gnu \
-                g++-loongarch64-linux-gnu \
-                libc6-dev-loongarch64-cross \
-                pkg-config \
-                ca-certificates \
-                openssl && \
-              rm -rf /var/lib/apt/lists/*
+          FROM alpine:3.19
+          RUN apk add --no-cache \
+            cross-loongarch64-unknown-linux-musl \
+            gcc-g++ \
+            musl-dev \
+            pkgconfig \
+            openssl-dev \
+            ca-certificates
           DOCKERFILE
           docker build -t loongarch64-cross:latest -f Dockerfile.loongarch64 .
 
