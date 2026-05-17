@@ -380,7 +380,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: loongarch64-unknown-linux-musl
+          - target: loongarch64-unknown-linux-gnu
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -392,34 +392,37 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install Zig as cross-compiler for C dependencies
+      - name: Install cross-rs
+        run: cargo install cross --locked
+
+      - name: Build LoongArch64 cross-compilation Docker image
         run: |
-          ZIG_VERSION="0.13.0"
-          curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
-            | tar xJ -C /opt
-          ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
-          printf '#!/bin/bash\nZIG="%s/zig"\nARGS=()\nfor a in "$@"; do\n  case "$a" in\n    --target=*|--param*|-pedantic|-Wno-*|-fstack-protector*|-fno-omit-frame-pointer|-ffunction-sections|-fdata-sections|-fPIC|-fPIE|-fno-plt|-fno-pic|-fno-pie|-Werror|-Wall|-Wextra|-Wconversion|-Wshadow|-Wcast-align|-Wmissing-field-initializers|-Wswitch-enum|-fwrapv|-fvisibility=hidden) ;;\n    *) ARGS+=("$a") ;;\n  esac\ndone\nexec "$ZIG" cc -target loongarch64-linux-musl -static "${ARGS[@]}"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-cc
-          sed 's/cc/c++/g; s/CC/CXX/g' /usr/local/bin/loongarch64-cc > /usr/local/bin/loongarch64-cxx
-          printf '#!/bin/bash\nexec %s/zig ar "$@"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-ar
-          chmod +x /usr/local/bin/loongarch64-cc /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
-          ${ZIG_DIR}/zig version
-          echo "--- Wrapper ---"
-          cat /usr/local/bin/loongarch64-cc
-          echo "--- Test ---"
-          echo 'int main(){return 0;}' | /usr/local/bin/loongarch64-cc -x c - -o /tmp/test-loongarch64 2>&1
-          /tmp/test-loongarch64 || echo "test binary exit code: $?"
-          echo "RUSTFLAGS=-C link-arg=-static" >> $GITHUB_ENV
-          echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_MUSL_LINKER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
-          echo "CC_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
-          echo "CXX_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
-          echo "AR_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-ar" >> $GITHUB_ENV
+          cat > Dockerfile.loongarch64 << 'DOCKERFILE'
+          FROM debian:bookworm-slim
+          RUN dpkg --add-architecture loongarch64 && \
+              echo "deb [arch=amd64] http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list && \
+              echo "deb http://deb.debian.org/debian-ports unstable main" > /etc/apt/sources.list.d/ports.list && \
+              apt-get update && \
+              apt-get install -y --no-install-recommends \
+                gcc-loongarch64-linux-gnu \
+                g++-loongarch64-linux-gnu \
+                libc6-dev-loongarch64-cross \
+                pkg-config \
+                ca-certificates \
+                openssl && \
+              rm -rf /var/lib/apt/lists/*
+          DOCKERFILE
+          docker build -t loongarch64-cross:latest -f Dockerfile.loongarch64 .
+
+      - name: Configure cross for LoongArch64
+        run: |
+          cat > Cross.toml << 'CROSSTOML'
+          [target.loongarch64-unknown-linux-gnu]
+          image = "loongarch64-cross:latest"
+          CROSSTOML
 
       - name: Install packaging tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y rpm
-          cargo install cargo-deb --locked
-          cargo install cargo-generate-rpm --locked
+        run: sudo apt-get update && sudo apt-get install -y rpm && cargo install cargo-deb --locked && cargo install cargo-generate-rpm --locked
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -437,16 +440,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-index-
 
-      - name: Cache Cargo build
-        uses: actions/cache@v4
-        with:
-          path: target/${{ matrix.target }}/release
-          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-${{ matrix.target }}-
-
-      - name: Build release binary (LoongArch64 gnu)
-        run: cargo build --release --target ${{ matrix.target }} --verbose
+      - name: Build release binary (LoongArch64 via cross-rs)
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Create TAR.GZ archive
         shell: bash
@@ -459,7 +454,6 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          echo "=== DEB Build Diagnostics (LoongArch64 gnu) ==="
           cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb" || {
             echo "WARNING: DEB build failed (LoongArch64), continuing"
             exit 0
