@@ -394,11 +394,15 @@ jobs:
 
       - name: Install Zig as cross-compiler for C dependencies
         run: |
-          ZIG_VERSION="0.12.0"
-          curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+          set -x
+          ZIG_VERSION="0.14.1"
+          echo ">>> Downloading Zig ${ZIG_VERSION}..."
+          curl -fSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
             | tar xJ -C /opt
+          echo ">>> Download complete"
           ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
-          
+          ${ZIG_DIR}/zig version
+          echo ">>> Creating CC wrapper..."
           CC_SCRIPT=/usr/local/bin/loongarch64-cc
           printf '#!/bin/bash\n' > "$CC_SCRIPT"
           printf 'ZIG="${ZIG_DIR:-%s}/zig"\n' "$ZIG_DIR" >> "$CC_SCRIPT"
@@ -425,25 +429,24 @@ jobs:
           printf '  esac\n' >> "$CC_SCRIPT"
           printf 'done\n' >> "$CC_SCRIPT"
           printf 'exec "$ZIG" cc -target loongarch64-linux-musl "${ARGS[@]}"\n' >> "$CC_SCRIPT"
-          
+          chmod +x "$CC_SCRIPT"
+          echo ">>> Wrapper created, contents:"
+          cat "$CC_SCRIPT"
           sed 's/cc/c++/g; s/CC/CXX/g' "$CC_SCRIPT" > /usr/local/bin/loongarch64-cxx
           printf '#!/bin/bash\nexec %s/zig ar "$@"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-ar
-          chmod +x /usr/local/bin/loongarch64-cc /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
-          
-          export ZIG_DIR
-          ${ZIG_DIR}/zig version
-          echo "--- Wrapper script ---"
-          cat /usr/local/bin/loongarch64-cc
-          echo "--- Test compilation ---"
-          echo 'int main(){return 0;}' | /usr/local/bin/loongarch64-cc -x c - -o /tmp/test-loongarch64 2>&1
-          echo "Exit code: $?"
-          echo "--- Environment variables set ---"
-          echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_MUSL_LINKER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
-          echo "CC_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
+          chmod +x /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
+          echo ">>> Test compilation..."
+          echo 'int main(){return 0;}' | "$CC_SCRIPT" -x c - -o /tmp/test-loongarch64 2>&1
+          echo ">>> Test exit code: $?"
+          ls -la /tmp/test-loongarch64 2>&1 || true
+          echo ">>> Setting env vars..."
+          echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_MUSL_LINKER=${CC_SCRIPT}" >> $GITHUB_ENV
+          echo "CC_loongarch64_unknown_linux_musl=${CC_SCRIPT}" >> $GITHUB_ENV
           echo "CXX_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
           echo "AR_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-ar" >> $GITHUB_ENV
-          echo "CMAKE_C_COMPILER=/usr/local/bin/loongarch64-cc" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER=${CC_SCRIPT}" >> $GITHUB_ENV
           echo "CMAKE_CXX_COMPILER=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
+          echo ">>> Done!"
 
       - name: Install packaging tools
         run: |
