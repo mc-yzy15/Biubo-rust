@@ -399,37 +399,34 @@ jobs:
             | tar xJ -C /opt
           ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
           
-          cat > /usr/local/bin/loongarch64-cc << 'WRAPPER_EOF'
-          #!/bin/bash
-          ZIG="${ZIG_DIR:-/opt/zig-linux-x86_64-0.12.0}/zig"
-          ARGS=()
-          for a in "$@"; do
-            case "$a" in
-              --target=*|--param*|-pedantic \
-              |-W*|-w \
-              |-fstack-protector*|-fno-omit-frame-pointer \
-              |-ffunction-sections|-fdata-sections \
-              |-fPIC|-fPIE|-fno-pic|-fno-pie|-fno-plt \
-              |-fwrapv|-fvisibility=* \
-              |-fno-exceptions|-fno-rtti \
-              |-fmath-errno|-frounding-math|-ftrapping-math \
-              |-fsigned-char|-funsigned-char \
-              |-fcommon|-fno-common \
-              |-fshort-wchar|-fno-short-wchar \
-              |-falign-functions*|-fno-align-functions* \
-              |-frecip*|-fno-recip* \
-              |-march=*|-mtune=*|-mcpu=*|-mabi=*|-mfloat-abi*|-mthumb \
-              |--sysroot=*|-isysroot=* \
-              |-pipe \
-              |-O*|-g*|-s \
-              |-DOPENSSL_NO_ASM) ;;
-              *) ARGS+=("$a") ;;
-            esac
-          done
-          exec "$ZIG" cc -target loongarch64-linux-musl "${ARGS[@]}"
-          WRAPPER_EOF
+          CC_SCRIPT=/usr/local/bin/loongarch64-cc
+          printf '#!/bin/bash\n' > "$CC_SCRIPT"
+          printf 'ZIG="${ZIG_DIR:-%s}/zig"\n' "$ZIG_DIR" >> "$CC_SCRIPT"
+          printf 'ARGS=()\n' >> "$CC_SCRIPT"
+          printf 'for a in "$@"; do\n' >> "$CC_SCRIPT"
+          printf '  case "$a" in\n' >> "$CC_SCRIPT"
+          printf '    --target=*|--param*|-pedantic|-W*|-w) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fstack-protector*|-fno-omit-frame-pointer) ;;\n' >> "$CC_SCRIPT"
+          printf '    -ffunction-sections|-fdata-sections) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fPIC|-fPIE|-fno-pic|-fno-pie|-fno-plt) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fwrapv|-fvisibility=*) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fno-exceptions|-fno-rtti) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fmath-errno|-frounding-math|-ftrapping-math) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fsigned-char|-funsigned-char) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fcommon|-fno-common) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fshort-wchar|-fno-short-wchar) ;;\n' >> "$CC_SCRIPT"
+          printf '    -falign-functions*|-fno-align-functions*) ;;\n' >> "$CC_SCRIPT"
+          printf '    -frecip*|-fno-recip*) ;;\n' >> "$CC_SCRIPT"
+          printf '    -march=*|-mtune=*|-mcpu=*|-mabi=*|-mfloat-abi*|-mthumb) ;;\n' >> "$CC_SCRIPT"
+          printf '    --sysroot=*|-isysroot=*) ;;\n' >> "$CC_SCRIPT"
+          printf '    -pipe|-O*|-g*|-s) ;;\n' >> "$CC_SCRIPT"
+          printf '    -DOPENSSL_NO_ASM) ;;\n' >> "$CC_SCRIPT"
+          printf '    *) ARGS+=("$a") ;;\n' >> "$CC_SCRIPT"
+          printf '  esac\n' >> "$CC_SCRIPT"
+          printf 'done\n' >> "$CC_SCRIPT"
+          printf 'exec "$ZIG" cc -target loongarch64-linux-musl "${ARGS[@]}"\n' >> "$CC_SCRIPT"
           
-          sed 's/cc/c++/g; s/CC/CXX/g' /usr/local/bin/loongarch64-cc > /usr/local/bin/loongarch64-cxx
+          sed 's/cc/c++/g; s/CC/CXX/g' "$CC_SCRIPT" > /usr/local/bin/loongarch64-cxx
           printf '#!/bin/bash\nexec %s/zig ar "$@"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-ar
           chmod +x /usr/local/bin/loongarch64-cc /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
           
