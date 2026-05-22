@@ -402,25 +402,30 @@ jobs:
           ZIG_URL=$(echo "$ZIG_INDEX" | python3 -c "
           import json, sys
           data = json.load(sys.stdin)
-          # Try specific versions first, then any stable release
-          for ver in ['0.12.0', '0.11.0', '0.10.0']:
+          # Strategy: prefer master (latest LLVM, full loongarch64 support)
+          # Fallback to stable versions (avoid 0.13.0 due to fp_to_fp16 LLVM bug)
+          
+          # 1. Try master x86_64-linux build (has latest LLVM, full target support)
+          arch = data.get('master', {}).get('x86_64-linux', {})
+          if isinstance(arch, dict) and 'tarball' in arch:
+              print(arch['tarball'])
+              sys.exit(0)
+          
+          # 2. Fallback: stable versions except 0.13.0 (LLVM19 fp_to_fp16 bug)
+          for ver in ['0.14.0', '0.12.0', '0.11.0', '0.10.0']:
               if ver in data:
                   arch = data[ver].get('x86_64-linux', {})
                   if isinstance(arch, dict) and 'tarball' in arch:
                       print(arch['tarball'])
                       sys.exit(0)
-          # Fallback: find any stable (non-dev) version
+          
+          # 3. Last resort: any available version
           for ver in sorted(data.keys(), reverse=True):
-              if ver.startswith('0.') and 'dev' not in ver:
-                  arch = data[ver].get('x86_64-linux', {})
+              if 'dev' in ver or ver.startswith('0.'):
+                  arch = data.get(ver, {}).get('x86_64-linux', {})
                   if isinstance(arch, dict) and 'tarball' in arch:
                       print(arch['tarball'])
                       sys.exit(0)
-          # Last resort: use master x86_64-linux build
-          arch = data.get('master', {}).get('x86_64-linux', {})
-          if isinstance(arch, dict) and 'tarball' in arch:
-              print(arch['tarball'])
-              sys.exit(0)
           sys.exit(1)
           ")
           echo ">>> Using Zig URL: ${ZIG_URL}"
