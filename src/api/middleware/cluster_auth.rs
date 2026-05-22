@@ -33,9 +33,12 @@ pub async fn cluster_api_auth_middleware(
         }
     };
 
-    let expected_secret = state.settings.read().cluster_shared_secret.clone();
+    let is_valid = {
+        let settings = state.settings.read();
+        constant_time_compare(provided_secret.as_bytes(), settings.cluster_shared_secret.as_bytes())
+    };
 
-    if constant_time_compare(provided_secret.as_bytes(), expected_secret.as_bytes()) {
+    if is_valid {
         next.run(request).await
     } else {
         (

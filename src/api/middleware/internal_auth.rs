@@ -33,9 +33,12 @@ pub async fn internal_api_auth_middleware(
         }
     };
 
-    let expected_key = state.settings.read().internal_api_key.clone();
+    let is_valid = {
+        let settings = state.settings.read();
+        constant_time_compare(provided_key.as_bytes(), settings.internal_api_key.as_bytes())
+    };
 
-    if constant_time_compare(provided_key.as_bytes(), expected_key.as_bytes()) {
+    if is_valid {
         next.run(request).await
     } else {
         (
