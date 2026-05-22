@@ -5,9 +5,11 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+use parking_lot::Mutex;
 
 const MSGPACK_EXT: &str = "msgpack";
 
@@ -63,7 +65,7 @@ impl Database {
         };
 
         if !db.path.exists() {
-            let guard = db.data.lock().unwrap();
+            let guard = db.data.lock();
             write_to_disk_impl(&guard, &db.path)?;
         }
 
@@ -87,9 +89,7 @@ impl Database {
                 if !flusher_dirty.load(Ordering::Acquire) {
                     continue;
                 }
-                let Ok(guard) = flusher_data.lock() else {
-                    continue;
-                };
+                let guard = flusher_data.lock();
                 if !flusher_dirty.load(Ordering::Relaxed) {
                     continue;
                 }
@@ -107,30 +107,24 @@ impl Database {
             })
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        *db.flusher_handle
-            .lock()
-            .expect("flusher_handle lock failed") = Some(handle);
+        *db.flusher_handle.lock() = Some(handle);
 
         Ok(db)
     }
 
     pub fn get(&self, key: &str) -> Option<serde_json::Value> {
-        self.data
-            .lock()
-            .expect("data lock failed")
-            .get(key)
-            .cloned()
+        self.data.lock().get(key).cloned()
     }
 
     pub fn set(&self, key: &str, value: serde_json::Value) {
-        let mut guard = self.data.lock().expect("Failed to lock database");
+        let mut guard = self.data.lock();
         guard.insert(key.to_string(), value);
         self.dirty.store(true, Ordering::Release);
     }
 
     #[cfg(feature = "plugin-system")]
     pub fn delete(&self, key: &str) -> bool {
-        let mut guard = self.data.lock().expect("Failed to lock database");
+        let mut guard = self.data.lock();
         let removed = guard.remove(key).is_some();
         if removed {
             self.dirty.store(true, Ordering::Release);
@@ -140,25 +134,19 @@ impl Database {
 
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.data.lock().expect("Failed to lock database").len()
+        self.data.lock().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.data
-            .lock()
-            .expect("Failed to lock database")
-            .is_empty()
+        self.data.lock().is_empty()
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
-        self.data
-            .lock()
-            .expect("Failed to lock database")
-            .contains_key(key)
+        self.data.lock().contains_key(key)
     }
 
     pub fn keys(&self) -> Vec<String> {
-        let guard = self.data.lock().expect("Failed to lock database");
+        let guard = self.data.lock();
         guard.keys().cloned().collect()
     }
 
@@ -166,7 +154,7 @@ impl Database {
         if !self.dirty.load(Ordering::Acquire) {
             return Ok(());
         }
-        let guard = self.data.lock().expect("Database lock poisoned");
+        let guard = self.data.lock();
         if !self.dirty.load(Ordering::Relaxed) {
             return Ok(());
         }
@@ -180,10 +168,9 @@ impl Database {
 
     pub fn close(&self) {
         self.stop_flag.store(true, Ordering::Release);
-        if let Ok(mut handle_guard) = self.flusher_handle.lock() {
-            if let Some(handle) = handle_guard.take() {
-                let _ = handle.join();
-            }
+        let mut handle_guard = self.flusher_handle.lock();
+        if let Some(handle) = handle_guard.take() {
+            let _ = handle.join();
         }
         let _ = self.flush();
     }
@@ -200,7 +187,10 @@ fn write_to_disk_impl(
         let mut file = fs::File::create(&tmp_path)?;
         file.write_all(&encoded)?;
     }
-    fs::rename(&tmp_path, path)?;
+    fs::rename(&tmp_path, path).or_else(|_| {
+        fs::copy(&tmp_path, path)?;
+        fs::remove_file(&tmp_path)
+    })?;
     Ok(())
 }
 

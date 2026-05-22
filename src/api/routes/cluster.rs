@@ -1,5 +1,6 @@
 #![cfg(feature = "cluster-mode")]
 
+use crate::api::response::ApiResponse;
 use crate::cluster::sync::{ConfigSync, ConfigUpdate};
 use crate::cluster::threat_share::ThreatIntelligenceShare;
 use axum::extract::State;
@@ -84,14 +85,8 @@ async fn receive_threat_event(
     let event: crate::cluster::threat_share::ThreatEvent = match serde_json::from_slice(&body) {
         Ok(e) => e,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "status": "error",
-                    "message": format!("Invalid threat event payload: {}", e),
-                })),
-            )
-                .into_response();
+            return ApiResponse::<()>::error(format!("Invalid threat event payload: {}", e))
+                .with_status(StatusCode::BAD_REQUEST);
         }
     };
 

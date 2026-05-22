@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::config::settings::Settings;
+use crate::config::settings::{Settings, SharedSettings};
 use crate::core::engine::waf_engine::{detect_request, DetectionResult};
 
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ impl AsyncDetectionQueue {
 #[cfg(test)]
 pub async fn detection_worker(
     mut receiver: mpsc::Receiver<DetectionTask>,
-    settings: Arc<parking_lot::RwLock<Settings>>,
+    settings: SharedSettings,
     results: Arc<DashMap<String, AsyncDetectionResult>>,
 ) {
     tracing::info!("Async detection worker started");
@@ -71,33 +71,30 @@ pub async fn detection_worker(
     loop {
         match receiver.recv().await {
             Some(task) => {
-                let settings_clone = settings.read().clone();
-                let results_clone = results.clone();
+                let settings_snapshot = settings.read().clone();
                 let request_id = task.request_id.clone();
 
-                tokio::spawn(async move {
-                    let detection = detect_request(
-                        &task.url,
-                        &task.method,
-                        &task.headers,
-                        &task.cookies,
-                        &task.body,
-                        &task.args,
-                        &settings_clone,
-                        &task.host,
-                    )
-                    .await;
+                let detection = detect_request(
+                    &task.url,
+                    &task.method,
+                    &task.headers,
+                    &task.cookies,
+                    &task.body,
+                    &task.args,
+                    &settings_snapshot,
+                    &task.host,
+                )
+                .await;
 
-                    let result = AsyncDetectionResult {
-                        request_id: request_id.clone(),
-                        detection,
-                        timestamp: chrono::Utc::now(),
-                    };
+                let result = AsyncDetectionResult {
+                    request_id: request_id.clone(),
+                    detection,
+                    timestamp: chrono::Utc::now(),
+                };
 
-                    tracing::debug!("Async detection completed for request: {}", request_id);
+                tracing::debug!("Async detection completed for request: {}", request_id);
 
-                    results_clone.insert(result.request_id.clone(), result);
-                });
+                results.insert(result.request_id.clone(), result);
             }
             None => {
                 tracing::warn!("Detection worker channel closed, shutting down");
@@ -110,7 +107,7 @@ pub async fn detection_worker(
 pub fn start_async_detection_workers(
     worker_count: usize,
     queue_size: usize,
-    settings: Arc<parking_lot::RwLock<Settings>>,
+    settings: SharedSettings,
 ) -> AsyncDetectionQueue {
     let (queue, receiver) = AsyncDetectionQueue::new(queue_size);
 
@@ -131,36 +128,33 @@ pub fn start_async_detection_workers(
 
                 match task {
                     Some(task) => {
-                        let settings_clone = settings_clone.read().clone();
-                        let results_clone = results_clone.clone();
+                        let settings_snapshot = settings_clone.read().clone();
                         let request_id = task.request_id.clone();
 
-                        tokio::spawn(async move {
-                            let detection = detect_request(
-                                &task.url,
-                                &task.method,
-                                &task.headers,
-                                &task.cookies,
-                                &task.body,
-                                &task.args,
-                                &settings_clone,
-                                &task.host,
-                            )
-                            .await;
+                        let detection = detect_request(
+                            &task.url,
+                            &task.method,
+                            &task.headers,
+                            &task.cookies,
+                            &task.body,
+                            &task.args,
+                            &settings_snapshot,
+                            &task.host,
+                        )
+                        .await;
 
-                            let result = AsyncDetectionResult {
-                                request_id: request_id.clone(),
-                                detection,
-                                timestamp: chrono::Utc::now(),
-                            };
+                        let result = AsyncDetectionResult {
+                            request_id: request_id.clone(),
+                            detection,
+                            timestamp: chrono::Utc::now(),
+                        };
 
-                            tracing::debug!(
-                                "Async detection completed for request: {}",
-                                request_id
-                            );
+                        tracing::debug!(
+                            "Async detection completed for request: {}",
+                            request_id
+                        );
 
-                            results_clone.insert(result.request_id.clone(), result);
-                        });
+                        results_clone.insert(result.request_id.clone(), result);
                     }
                     None => {
                         tracing::warn!("Detection worker {} channel closed", i);

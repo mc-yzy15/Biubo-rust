@@ -1,3 +1,6 @@
+use crate::api::app::AppState;
+use crate::api::response::ApiResponse;
+use crate::utils::crypto::constant_time_compare;
 use axum::extract::Request;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -5,9 +8,6 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::json;
 use std::sync::Arc;
-
-use crate::api::app::AppState;
-use crate::utils::crypto::constant_time_compare;
 
 pub async fn api_key_auth_middleware(
     State(state): State<Arc<AppState>>,
@@ -18,14 +18,8 @@ pub async fn api_key_auth_middleware(
     let api_key = match extract_api_key(&headers) {
         Some(key) => key,
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "status": "error",
-                    "message": "Missing API key. Provide X-API-Key header."
-                })),
-            )
-                .into_response();
+            return ApiResponse::<()>::error("Missing API key. Provide X-API-Key header.")
+                .with_status(StatusCode::UNAUTHORIZED);
         }
     };
 
@@ -39,27 +33,15 @@ pub async fn api_key_auth_middleware(
         match waf_api_key {
             Some(key) => (key.is_active, key.permissions.clone()),
             None => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({
-                        "status": "error",
-                        "message": "Invalid API key."
-                    })),
-                )
-                    .into_response();
+                return ApiResponse::<()>::error("Invalid API key.")
+                    .with_status(StatusCode::FORBIDDEN);
             }
         }
     };
 
     if !is_active {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "status": "error",
-                "message": "API key is inactive."
-            })),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("API key is inactive.")
+            .with_status(StatusCode::FORBIDDEN);
     }
 
     next.run(request).await

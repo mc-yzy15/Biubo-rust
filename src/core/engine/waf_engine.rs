@@ -7,7 +7,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
-#[cfg(feature = "advanced-rules")]
 use std::sync::Arc;
 
 use crate::config::settings::Settings;
@@ -26,6 +25,16 @@ static JSON_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 static JSON_OBJECT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{.*?\}").expect("JSON object regex pattern is a safe literal"));
+
+static MULTIPART_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)(filename="[^"]*".*?\r?\n\r?\n)([\s\S]{64})([\s\S]+?)(?=\r?\n--|$)"#)
+        .expect("multipart form-data regex pattern is a safe literal")
+});
+
+static REPEAT_CHAR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(.)\1{64,}")
+        .expect("repeated char regex pattern is a safe literal")
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectionResult {
@@ -133,12 +142,13 @@ impl DetectionResult {
 
 struct CacheEntry {
     timestamp: std::time::Instant,
+    last_access: std::time::Instant,
     data: DetectionResult,
 }
 
 struct HostCompiledRules {
     hash: String,
-    compiled: HashMap<String, Regex>,
+    compiled: Arc<HashMap<String, Regex>>,
 }
 
 static DETECTION_CACHE: once_cell::sync::Lazy<DashMap<String, CacheEntry>> =
@@ -193,6 +203,7 @@ static CACHE_STATS: LazyLock<CacheStats> = LazyLock::new(|| CacheStats {
 });
 
 const MAX_CACHE_SIZE: usize = 10000;
+const MAX_HOST_CACHE_SIZE: usize = 10000;
 
 const LLM_SYSTEM_INSTRUCTION: &str = r#"You are an HTTP security analysis engine. Your job: distinguish real attacks from normal user behavior.
 
@@ -247,7 +258,7 @@ const LLM_USER_PROMPT_TEMPLATE: &str = r#"## Current Request
 
 Analyze the above request and return ONLY a JSON object as specified in your instructions."#;
 
-pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
+pub fn get_host_rules(host: &str) -> Arc<HashMap<String, Regex>> {
     if let Some(cached_hash_entry) = HOST_RULE_HASH_CACHE.get(host) {
         CACHE_STATS.hash_cache_hits.fetch_add(1, Ordering::Relaxed);
         let cached_hash = cached_hash_entry.value().clone();
@@ -280,6 +291,10 @@ pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
     let rule_hash = compute_rule_hash(&waf_rules);
 
     HOST_RULE_HASH_CACHE.insert(host.to_string(), rule_hash.clone());
+
+    if HOST_RULE_HASH_CACHE.len() > MAX_HOST_CACHE_SIZE {
+        tracing::warn!("HOST_RULE_HASH_CACHE size ({}) exceeds limit ({})", HOST_RULE_HASH_CACHE.len(), MAX_HOST_CACHE_SIZE);
+    }
 
     if let Some(host_cache) = HOST_COMPILED_RULES.get(host) {
         if host_cache.hash == rule_hash {
@@ -323,15 +338,21 @@ pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
         }
     }
 
+    let compiled_arc = Arc::new(compiled);
+
     HOST_COMPILED_RULES.insert(
         host.to_string(),
         HostCompiledRules {
             hash: rule_hash.clone(),
-            compiled: compiled.clone(),
+            compiled: compiled_arc.clone(),
         },
     );
 
-    compiled
+    if HOST_COMPILED_RULES.len() > MAX_HOST_CACHE_SIZE {
+        tracing::warn!("HOST_COMPILED_RULES size ({}) exceeds limit ({})", HOST_COMPILED_RULES.len(), MAX_HOST_CACHE_SIZE);
+    }
+
+    compiled_arc
 }
 
 fn compute_rule_hash(rules: &Value) -> String {
@@ -406,18 +427,34 @@ pub fn initialize_waf_cache_background(hosts: Vec<String>) {
 
 pub fn check_rules(
     url: &str,
-    headers: &str,
-    cookies: &str,
+    headers: &HashMap<String, String>,
+    cookies: &HashMap<String, String>,
     data: &str,
-    host_rules: Option<&HashMap<String, Regex>>,
+    host_rules: Option<&Arc<HashMap<String, Regex>>>,
+    early_exit: bool,
 ) -> (bool, Vec<String>) {
-    let target = format!("{} {} {} {}", url, headers, cookies, data).to_lowercase();
+    let mut target = String::with_capacity(url.len() + data.len() + 256);
+    target.push_str(url);
+    target.push(' ');
+    for v in headers.values() {
+        target.push_str(v);
+        target.push(' ');
+    }
+    for v in cookies.values() {
+        target.push_str(v);
+        target.push(' ');
+    }
+    target.push_str(data);
+
     let mut matched = Vec::new();
     match host_rules {
         Some(rules) => {
             for (attack_type, pattern) in rules.iter() {
                 if pattern.is_match(&target) {
                     matched.push(attack_type.clone());
+                    if early_exit {
+                        return (true, matched);
+                    }
                 }
             }
         }
@@ -425,6 +462,9 @@ pub fn check_rules(
             for (attack_type, pattern) in COMPILED_RULES.iter() {
                 if pattern.is_match(&target) {
                     matched.push(attack_type.to_string());
+                    if early_exit {
+                        return (true, matched);
+                    }
                 }
             }
         }
@@ -432,9 +472,10 @@ pub fn check_rules(
     (!matched.is_empty(), matched)
 }
 
-pub fn cache_key(url: &str, data: &str) -> String {
+pub fn cache_key(url: &str, method: &str, data: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    method.hash(&mut hasher);
     url.hash(&mut hasher);
     data.hash(&mut hasher);
     format!("waf:{:016x}", hasher.finish())
@@ -516,10 +557,11 @@ pub async fn detect_request(
 
     let (is_malicious, attack_types) = check_rules(
         url,
-        &serde_json::to_string(headers).unwrap_or_default(),
-        &serde_json::to_string(cookies).unwrap_or_default(),
+        headers,
+        cookies,
         &parsed_body,
         Some(&host_rules),
+        true,
     );
 
     if is_malicious {
@@ -531,10 +573,11 @@ pub async fn detect_request(
         parsed_body,
         serde_json::to_string(args).unwrap_or_default()
     );
-    let key = cache_key(url, &data_combined);
+    let key = cache_key(url, method, &data_combined);
 
-    if let Some(entry) = DETECTION_CACHE.get(&key) {
+    if let Some(mut entry) = DETECTION_CACHE.get_mut(&key) {
         if entry.timestamp.elapsed().as_secs() < settings.cache_ttl as u64 {
+            entry.last_access = std::time::Instant::now();
             return entry.data.clone();
         }
     }
@@ -607,13 +650,14 @@ pub async fn detect_request(
         );
 
         if DETECTION_CACHE.len() >= MAX_CACHE_SIZE {
-            let keys: Vec<String> = DETECTION_CACHE
+            let mut entries: Vec<(String, std::time::Instant)> = DETECTION_CACHE
                 .iter()
-                .take(1000)
-                .map(|e| e.key().clone())
+                .map(|e| (e.key().clone(), e.value().last_access))
                 .collect();
-            for k in keys {
-                DETECTION_CACHE.remove(&k);
+            entries.sort_by_key(|(_, t)| *t);
+            let remove_count = entries.len() / 4;
+            for (key, _) in entries.iter().take(remove_count) {
+                DETECTION_CACHE.remove(key);
             }
         }
 
@@ -621,6 +665,7 @@ pub async fn detect_request(
             key,
             CacheEntry {
                 timestamp: std::time::Instant::now(),
+                last_access: std::time::Instant::now(),
                 data: enhanced_result.clone(),
             },
         );
@@ -638,7 +683,7 @@ fn extract_reputation_score(headers: &HashMap<String, String>) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn build_ip_history(host: &str, headers: &HashMap<String, String>) -> Vec<threat_signals::RequestRecord> {
+fn get_client_log_entries(host: &str, headers: &HashMap<String, String>) -> Vec<serde_json::Value> {
     let db = get_db(host);
     let client_ip = headers
         .get("x-real-ip")
@@ -660,79 +705,57 @@ fn build_ip_history(host: &str, headers: &HashMap<String, String>) -> Vec<threat
         None => return vec![],
     };
 
-    let mut history = vec![];
+    logs.iter()
+        .rev()
+        .filter(|entry| {
+            let entry_ip = entry.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+            let entry_cdn_ip = entry.get("cdn_ip").and_then(|v| v.as_str()).unwrap_or("");
+            entry_ip == client_ip || entry_cdn_ip == client_ip
+        })
+        .cloned()
+        .collect()
+}
 
-    for entry in logs.iter().rev().take(10) {
-        let entry_ip = entry.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let entry_cdn_ip = entry.get("cdn_ip").and_then(|v| v.as_str()).unwrap_or("");
+fn build_ip_history(host: &str, headers: &HashMap<String, String>) -> Vec<threat_signals::RequestRecord> {
+    let entries = get_client_log_entries(host, headers);
 
-        if entry_ip == client_ip || entry_cdn_ip == client_ip {
-            let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let status_code = entry
-                .get("status")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(200) as u16;
-            let is_suspicious = entry
-                .get("is_suspicious")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+    entries.iter().take(10).map(|entry| {
+        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let status_code = entry
+            .get("status")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(200) as u16;
+        let is_suspicious = entry
+            .get("is_suspicious")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-            history.push(threat_signals::RequestRecord {
-                url,
-                status_code,
-                is_suspicious,
-            });
+        threat_signals::RequestRecord {
+            url,
+            status_code,
+            is_suspicious,
         }
-    }
-
-    history
+    }).collect()
 }
 
 fn build_history(host: &str, headers: &HashMap<String, String>) -> String {
-    let db = get_db(host);
-    let client_ip = headers
-        .get("x-real-ip")
-        .or_else(|| headers.get("x-forwarded-for"))
-        .or_else(|| headers.get("cf-connecting-ip"))
-        .cloned()
-        .unwrap_or_default();
-
-    let log_db = match db.get_log_db() {
-        Some(ldb) => ldb,
-        None => return String::new(),
-    };
-
-    let logs = match log_db.get("logs") {
-        Some(v) => match v.as_array() {
-            Some(arr) => arr.clone(),
-            None => return String::new(),
-        },
-        None => return String::new(),
-    };
+    let entries = get_client_log_entries(host, headers);
 
     let mut history = String::new();
     let mut counter = 0;
 
-    for entry in logs.iter().rev() {
-        if counter >= 5 {
-            break;
-        }
-        let entry_ip = entry.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let entry_cdn_ip = entry.get("cdn_ip").and_then(|v| v.as_str()).unwrap_or("");
-
-        if entry_ip == client_ip || entry_cdn_ip == client_ip {
-            counter += 1;
-            let time = entry.get("time").and_then(|v| v.as_str()).unwrap_or("");
-            let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("");
-            let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            let entry_headers = entry
-                .get("headers")
-                .cloned()
-                .unwrap_or(serde_json::json!({}));
-            let status = entry.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
-            let stuff = serde_json::json!([time, method, url, entry_headers, status]);
-            history.push_str(&format!("{}. {}\n", counter, stuff));
-        }
+    for entry in entries.iter().take(5) {
+        counter += 1;
+        let time = entry.get("time").and_then(|v| v.as_str()).unwrap_or("");
+        let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let entry_headers = entry
+            .get("headers")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        let status = entry.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+        let stuff = serde_json::json!([time, method, url, entry_headers, status]);
+        history.push_str(&format!("{}. {}\n", counter, stuff));
     }
 
     if history.is_empty() {
@@ -761,13 +784,8 @@ fn parse_body(body: &[u8], content_type: &str) -> String {
         String::from_utf8_lossy(safe_body).to_string()
     } else if content_type.contains("multipart/form-data") {
         let raw_str = String::from_utf8_lossy(safe_body).to_string();
-        let re = Regex::new(
-            r#"(?i)(filename="[^"]*".*?\r?\n\r?\n)([\s\S]{64})([\s\S]+?)(?=\r?\n--|$)"#,
-        )
-        .expect(
-            "multipart form-data regex pattern is a safe literal and will never fail at runtime",
-        );
-        re.replace_all(&raw_str, "${1}${2}\n...<Binary File Truncated>\n")
+        MULTIPART_RE
+            .replace_all(&raw_str, "${1}${2}\n...<Binary File Truncated>\n")
             .to_string()
     } else {
         String::from_utf8_lossy(safe_body).to_string()
@@ -783,9 +801,7 @@ fn html_escape_for_prompt(s: &str) -> String {
 }
 
 fn optimize_for_llm(s: &str, limit: usize) -> String {
-    let re = regex::Regex::new(r"(.)\1{64,}")
-        .expect("repeated char regex pattern is a safe literal and will never fail at runtime");
-    let compressed = re
+    let compressed = REPEAT_CHAR_RE
         .replace_all(s, "${1}${1}${1}...<Repeated Padding Removed>")
         .to_string();
 
@@ -899,10 +915,11 @@ pub fn quick_detect_request(
 
     let (is_malicious, attack_types) = check_rules(
         url,
-        &serde_json::to_string(headers).unwrap_or_default(),
-        &serde_json::to_string(cookies).unwrap_or_default(),
+        headers,
+        cookies,
         &parsed_body,
         Some(&host_rules),
+        true,
     );
 
     if is_malicious {
@@ -914,10 +931,11 @@ pub fn quick_detect_request(
         parsed_body,
         serde_json::to_string(args).unwrap_or_default()
     );
-    let key = cache_key(url, &data_combined);
+    let key = cache_key(url, method, &data_combined);
 
-    if let Some(entry) = DETECTION_CACHE.get(&key) {
+    if let Some(mut entry) = DETECTION_CACHE.get_mut(&key) {
         if entry.timestamp.elapsed().as_secs() < settings.cache_ttl as u64 {
+            entry.last_access = std::time::Instant::now();
             return entry.data.clone();
         }
     }

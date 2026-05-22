@@ -1,8 +1,7 @@
 use crate::api::app::AppState;
+use crate::config::settings::Settings;
 use crate::core::engine::async_detection_queue::DetectionTask;
 use crate::core::engine::waf_engine::quick_detect_request;
-use crate::core::reputation::aggregator::ReputationAggregator;
-use crate::core::reputation::manager::ReputationManager;
 use crate::core::security::challenge::{
     get_challenge_token, verify_challenge_token, ChallengeStatus,
 };
@@ -11,7 +10,7 @@ use crate::core::session::manager::{build_log_entry, create_session};
 use crate::data::storage::manager::get_db;
 use crate::services::proxy::forwarder::forward_request;
 use crate::utils::compression::decode_content;
-use crate::utils::http_utils::{get_client_ip, is_static_resource};
+use crate::utils::http_utils::{get_client_ip_with_trust, is_static_resource};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -20,10 +19,11 @@ use axum::routing::get;
 use axum::Router;
 use dashmap::DashMap;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use url::form_urlencoded;
 
-static STRIKE_COUNTER: once_cell::sync::Lazy<DashMap<String, u32>> =
+static STRIKE_COUNTER: once_cell::sync::Lazy<DashMap<String, (u32, std::time::Instant)>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -74,7 +74,13 @@ async fn reverse_proxy(
             }
         };
 
-        let client_ip = get_client_ip(req.headers(), &settings.get_ip_from_headers);
+        let remote_addr = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip().to_string())
+            .unwrap_or_default();
+
+        let client_ip = get_client_ip_with_trust(req.headers(), &settings.get_ip_from_headers, &remote_addr);
         let user_agent = req
             .headers()
             .get("user-agent")
@@ -178,7 +184,7 @@ async fn reverse_proxy(
 
     if proxy_status != "pass" && !is_whitelisted {
         let rate_result = {
-            let s = state.settings.read().clone();
+            let s: Arc<Settings> = state.settings.read().clone();
             check_rate_limit(&client_ip, &host, &s).await
         };
 
@@ -214,8 +220,8 @@ async fn reverse_proxy(
                         return build_forbidden_response(&state, "403");
                     }
 
-                    let mut strikes = STRIKE_COUNTER.entry(client_ip.clone()).or_insert(0);
-                    let current = *strikes.value();
+                    let mut strikes = STRIKE_COUNTER.entry(client_ip.clone()).or_insert_with(|| (0, std::time::Instant::now()));
+                    let current = strikes.value().0;
                     if current >= 3 {
                         let db = get_db(&host);
                         let reason = match rate_result.reason {
@@ -227,7 +233,8 @@ async fn reverse_proxy(
                         let _ = db.ban_ip_temporary(&client_ip, reason).await;
                         return build_captcha_response(&state, &challenge_secret);
                     }
-                    *strikes.value_mut() += 1;
+                    strikes.value_mut().0 += 1;
+                    strikes.value_mut().1 = std::time::Instant::now();
                     return build_challenge_response(
                         &state,
                         &client_ip,
@@ -239,13 +246,7 @@ async fn reverse_proxy(
             }
         }
 
-        let reputation_aggregator = ReputationAggregator::with_defaults();
-        let reputation_configs = {
-            let s = state.settings.read();
-            s.ip_reputation_providers.clone()
-        };
-        let reputation_manager = ReputationManager::new(&reputation_configs);
-        let reputation_score = reputation_aggregator.aggregate(&client_ip, &reputation_manager).await;
+        let reputation_score = state.reputation_aggregator.aggregate(&client_ip, &state.reputation_manager).await;
 
         let normalized_score = reputation_score.score * 100.0;
         if normalized_score > 70.0 {
@@ -280,7 +281,7 @@ async fn reverse_proxy(
         }
 
         let detection = {
-            let s = state.settings.read().clone();
+            let s = state.settings.read();
             quick_detect_request(
                 &path,
                 method.as_str(),
@@ -288,7 +289,7 @@ async fn reverse_proxy(
                 &cookies,
                 &decoded_body,
                 &args_map,
-                &s,
+                &**s,
                 &host,
             )
         };
@@ -333,7 +334,7 @@ async fn reverse_proxy(
     }
 
     let forward_result = {
-        let s = state.settings.read().clone();
+        let s: Arc<Settings> = state.settings.read().clone();
         forward_request(
             &target_base,
             &path,
@@ -590,4 +591,12 @@ fn build_forbidden_response(state: &Arc<AppState>, code: &str) -> Response {
     };
 
     (status, Html(html)).into_response()
+}
+
+pub fn start_strike_gc_worker() {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
+        let now = std::time::Instant::now();
+        STRIKE_COUNTER.retain(|_, (_, instant)| now.duration_since(*instant).as_secs() < 3600);
+    });
 }

@@ -42,6 +42,33 @@ impl From<reqwest::Error> for ProviderError {
     }
 }
 
+impl From<ProviderError> for crate::error::WafError {
+    fn from(e: ProviderError) -> Self {
+        crate::error::WafError::Network(e.to_string())
+    }
+}
+
+pub struct HttpProviderBase {
+    pub client: Client,
+    pub weight: f64,
+    pub base_url: String,
+}
+
+impl HttpProviderBase {
+    pub fn new(weight: f64, base_url: Option<String>, default_url: &str) -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .unwrap_or_default();
+
+        Self {
+            client,
+            weight,
+            base_url: base_url.unwrap_or_else(|| default_url.to_string()),
+        }
+    }
+}
+
 #[async_trait]
 pub trait ReputationProvider: Send + Sync {
     async fn query(&self, ip: &str) -> Result<ReputationProviderResult, ProviderError>;
@@ -52,24 +79,15 @@ pub trait ReputationProvider: Send + Sync {
 }
 
 pub struct AbuseIPDBProvider {
-    client: Client,
+    base: HttpProviderBase,
     api_key: String,
-    weight: f64,
-    base_url: String,
 }
 
 impl AbuseIPDBProvider {
     pub fn new(api_key: String, weight: f64, base_url: Option<String>) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .unwrap_or_default();
-
         Self {
-            client,
+            base: HttpProviderBase::new(weight, base_url, "https://api.abuseipdb.com"),
             api_key,
-            weight,
-            base_url: base_url.unwrap_or_else(|| "https://api.abuseipdb.com".to_string()),
         }
     }
 }
@@ -77,9 +95,10 @@ impl AbuseIPDBProvider {
 #[async_trait]
 impl ReputationProvider for AbuseIPDBProvider {
     async fn query(&self, ip: &str) -> Result<ReputationProviderResult, ProviderError> {
-        let url = format!("{}/api/v2/check?ipAddress={}", self.base_url, ip);
+        let url = format!("{}/api/v2/check?ipAddress={}", self.base.base_url, ip);
 
         let response = self
+            .base
             .client
             .get(&url)
             .header("Key", &self.api_key)
@@ -119,29 +138,20 @@ impl ReputationProvider for AbuseIPDBProvider {
     }
 
     fn weight(&self) -> f64 {
-        self.weight
+        self.base.weight
     }
 }
 
 pub struct GreyNoiseProvider {
-    client: Client,
+    base: HttpProviderBase,
     api_key: String,
-    weight: f64,
-    base_url: String,
 }
 
 impl GreyNoiseProvider {
     pub fn new(api_key: String, weight: f64, base_url: Option<String>) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .unwrap_or_default();
-
         Self {
-            client,
+            base: HttpProviderBase::new(weight, base_url, "https://api.greynoise.io"),
             api_key,
-            weight,
-            base_url: base_url.unwrap_or_else(|| "https://api.greynoise.io".to_string()),
         }
     }
 
@@ -160,9 +170,10 @@ impl GreyNoiseProvider {
 #[async_trait]
 impl ReputationProvider for GreyNoiseProvider {
     async fn query(&self, ip: &str) -> Result<ReputationProviderResult, ProviderError> {
-        let url = format!("{}/v3/community/{}", self.base_url, ip);
+        let url = format!("{}/v3/community/{}", self.base.base_url, ip);
 
         let response = self
+            .base
             .client
             .get(&url)
             .header("Key", &self.api_key)
@@ -203,29 +214,20 @@ impl ReputationProvider for GreyNoiseProvider {
     }
 
     fn weight(&self) -> f64 {
-        self.weight
+        self.base.weight
     }
 }
 
 pub struct VirusTotalProvider {
-    client: Client,
+    base: HttpProviderBase,
     api_key: String,
-    weight: f64,
-    base_url: String,
 }
 
 impl VirusTotalProvider {
     pub fn new(api_key: String, weight: f64, base_url: Option<String>) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .unwrap_or_default();
-
         Self {
-            client,
+            base: HttpProviderBase::new(weight, base_url, "https://www.virustotal.com"),
             api_key,
-            weight,
-            base_url: base_url.unwrap_or_else(|| "https://www.virustotal.com".to_string()),
         }
     }
 }
@@ -233,9 +235,10 @@ impl VirusTotalProvider {
 #[async_trait]
 impl ReputationProvider for VirusTotalProvider {
     async fn query(&self, ip: &str) -> Result<ReputationProviderResult, ProviderError> {
-        let url = format!("{}/api/v3/ip_addresses/{}", self.base_url, ip);
+        let url = format!("{}/api/v3/ip_addresses/{}", self.base.base_url, ip);
 
         let response = self
+            .base
             .client
             .get(&url)
             .header("x-apikey", &self.api_key)
@@ -292,27 +295,18 @@ impl ReputationProvider for VirusTotalProvider {
     }
 
     fn weight(&self) -> f64 {
-        self.weight
+        self.base.weight
     }
 }
 
 pub struct IPInfoProvider {
-    client: Client,
-    weight: f64,
-    base_url: String,
+    base: HttpProviderBase,
 }
 
 impl IPInfoProvider {
     pub fn new(weight: f64, base_url: Option<String>) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .unwrap_or_default();
-
         Self {
-            client,
-            weight,
-            base_url: base_url.unwrap_or_else(|| "https://ipinfo.io".to_string()),
+            base: HttpProviderBase::new(weight, base_url, "https://ipinfo.io"),
         }
     }
 
@@ -345,9 +339,9 @@ impl IPInfoProvider {
 #[async_trait]
 impl ReputationProvider for IPInfoProvider {
     async fn query(&self, ip: &str) -> Result<ReputationProviderResult, ProviderError> {
-        let url = format!("{}/{}/json", self.base_url, ip);
+        let url = format!("{}/{}/json", self.base.base_url, ip);
 
-        let response = self.client.get(&url).send().await?;
+        let response = self.base.client.get(&url).send().await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -403,7 +397,7 @@ impl ReputationProvider for IPInfoProvider {
     }
 
     fn weight(&self) -> f64 {
-        self.weight
+        self.base.weight
     }
 }
 

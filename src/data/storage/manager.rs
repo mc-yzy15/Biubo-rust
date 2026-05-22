@@ -7,9 +7,36 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 use crate::config::settings::Settings;
 use crate::data::storage::base::Database;
+
+struct PendingLogEntry {
+    host: String,
+    entry: serde_json::Value,
+}
+
+static LOG_SENDER: LazyLock<tokio::sync::mpsc::UnboundedSender<PendingLogEntry>> = LazyLock::new(|| {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    start_log_writer_worker(rx);
+    tx
+});
+
+fn start_log_writer_worker(mut rx: tokio::sync::mpsc::UnboundedReceiver<PendingLogEntry>) {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("log writer runtime");
+        rt.block_on(async move {
+            while let Some(pending) = rx.recv().await {
+                let db = get_db(&pending.host);
+                db.write_log_direct(pending.entry);
+            }
+        });
+    });
+}
 
 #[cfg(feature = "plugin-system")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +173,13 @@ impl ProxyDB {
     }
 
     pub fn write_log(&self, entry: serde_json::Value) {
+        let _ = LOG_SENDER.send(PendingLogEntry {
+            host: self.host.clone(),
+            entry,
+        });
+    }
+
+    pub fn write_log_direct(&self, entry: serde_json::Value) {
         #[cfg(feature = "plugin-system")]
         let entry_for_exporter = entry.clone();
         let should_export = {
@@ -425,6 +459,41 @@ impl ProxyDB {
     pub fn get_log_db(&self) -> Option<Arc<Database>> {
         self.log_db.lock().clone()
     }
+
+    pub fn get_ban_record(&self, ip: &str) -> Option<serde_json::Value> {
+        self.ram_get("security")
+            .and_then(|v| v.get("blacklist").cloned())
+            .and_then(|bl| bl.get(ip).cloned())
+    }
+
+    pub fn get_logs(&self) -> Vec<serde_json::Value> {
+        let _ = self.ensure_log_db();
+        let log_db = self.log_db.lock();
+        match *log_db {
+            Some(ref db) => db
+                .get("logs")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default(),
+            None => vec![],
+        }
+    }
+
+    pub fn find_log_by_request_id(&self, id: &str) -> Option<serde_json::Value> {
+        let _ = self.ensure_log_db();
+        let log_db = self.log_db.lock();
+        match *log_db {
+            Some(ref db) => {
+                let logs = db
+                    .get("logs")
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default();
+                logs.iter()
+                    .find(|e| e.get("request_id").and_then(|v| v.as_str()) == Some(id))
+                    .cloned()
+            }
+            None => None,
+        }
+    }
 }
 
 static PROXY_DBS: once_cell::sync::Lazy<DashMap<String, Arc<ProxyDB>>> =
@@ -435,7 +504,13 @@ pub fn get_db(host: &str) -> Arc<ProxyDB> {
         .entry(host.to_string())
         .or_insert_with(|| {
             let settings = crate::config::settings::Settings::load();
-            Arc::new(ProxyDB::new(host, &settings).expect("Failed to create ProxyDB"))
+            match ProxyDB::new(host, &settings) {
+                Ok(db) => Arc::new(db),
+                Err(e) => {
+                    tracing::error!("Failed to create ProxyDB for host '{}': {}", host, e);
+                    panic!("Failed to create ProxyDB for host '{}': {}", host, e)
+                }
+            }
         })
         .clone()
 }

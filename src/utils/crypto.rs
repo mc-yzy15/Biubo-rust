@@ -6,18 +6,16 @@ pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
 }
 
 pub fn verify_password(password: &str, hash: &str) -> bool {
-    if hash.starts_with("$2") {
-        verify(password, hash).unwrap_or(false)
-    } else {
-        constant_time_compare(password.as_bytes(), hash.as_bytes())
-    }
+    verify(password, hash).unwrap_or(false)
 }
 
 pub fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
+    let len_eq = subtle::ConstantTimeEq::ct_eq(&a.len(), &b.len());
+    let mut result = 0u8;
+    for i in 0..a.len().min(b.len()) {
+        result |= a[i] ^ b[i];
     }
-    a.ct_eq(b).into()
+    (len_eq & result.ct_eq(&0u8)).into()
 }
 
 pub fn is_hashed(value: &str) -> bool {
@@ -52,13 +50,6 @@ mod tests {
         assert!(constant_time_compare(a, b));
         assert!(!constant_time_compare(a, c));
         assert!(!constant_time_compare(a, d));
-    }
-
-    #[test]
-    fn test_plaintext_fallback() {
-        let plaintext = "my_secret_password";
-        assert!(verify_password(plaintext, plaintext));
-        assert!(!verify_password("wrong", plaintext));
     }
 
     #[test]

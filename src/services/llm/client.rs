@@ -1,5 +1,7 @@
 use crate::config::settings::Settings;
 
+static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(reqwest::Client::new);
+
 pub async fn llm_call(
     question: &str,
     thinking: bool,
@@ -23,9 +25,7 @@ pub async fn llm_call(
         body["enable_thinking"] = serde_json::json!(true);
     }
 
-    let client = reqwest::Client::new();
-
-    let response = match client
+    let response = match HTTP_CLIENT
         .post(format!(
             "{}/chat/completions",
             settings.llm_base_url.trim_end_matches('/')

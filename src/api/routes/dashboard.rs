@@ -1,4 +1,6 @@
 use crate::api::app::AppState;
+use crate::api::middleware::dashboard_auth::mask_sensitive_value;
+use crate::api::response::ApiResponse;
 use crate::utils::crypto::verify_password;
 use axum::Router;
 use axum::extract::State;
@@ -25,12 +27,16 @@ struct ConfigUpdateRequest {
     llm_base_url: Option<String>,
 }
 
-pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
+pub fn public_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/dashboard/login", get(login_page))
         .route("/dashboard", get(dashboard_page))
         .route("/dashboard/api/login", post(api_login))
         .route("/dashboard/api/logout", post(api_logout))
+}
+
+pub fn protected_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
+    Router::new()
         .route("/api/biubo/config", get(get_config).post(update_config))
         .route("/api/biubo/dashboard/cache-stats", get(cache_stats))
         .route("/api/biubo/dashboard/proxy-map", get(proxy_map))
@@ -58,33 +64,38 @@ async fn api_login(
 ) -> Response {
     let password = state.settings.read().dashboard_password.clone();
     if verify_password(&payload.password, &password) {
-        Json(json!({"status": "success"})).into_response()
+        Json(ApiResponse::<()>::ok()).into_response()
     } else {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"status": "error", "msg": "Incorrect password"})),
-        )
-            .into_response()
+        ApiResponse::<()>::error("Incorrect password").with_status(StatusCode::UNAUTHORIZED)
     }
 }
 
 async fn api_logout() -> Response {
-    Json(json!({"status": "success"})).into_response()
+    Json(ApiResponse::<()>::ok()).into_response()
 }
 
 async fn get_config(State(state): State<Arc<AppState>>) -> Response {
     let s = state.settings.read();
-    Json(json!({
-        "status": "success",
-        "data": {
-            "WAF_PORT": s.waf_port,
-            "DASHBOARD_PATH": s.dashboard_path,
-            "PROXY_MAP": s.proxy_map,
-            "API_KEY": s.api_key,
-            "LLM_MODEL": s.llm_model,
-            "LLM_BASE_URL": s.llm_base_url
-        }
-    }))
+    let masked_api_key = mask_sensitive_value(&s.api_key, 4);
+    let masked_dashboard_password = if s.dashboard_password.is_empty() {
+        String::new()
+    } else {
+        "***".to_string()
+    };
+    let masked_llm_quick_api_key = mask_sensitive_value(&s.llm_quick_api_key, 4);
+    let masked_llm_deep_api_key = mask_sensitive_value(&s.llm_deep_api_key, 4);
+
+    Json(ApiResponse::success(serde_json::json!({
+        "WAF_PORT": s.waf_port,
+        "DASHBOARD_PATH": s.dashboard_path,
+        "PROXY_MAP": s.proxy_map,
+        "API_KEY": masked_api_key,
+        "DASHBOARD_PASSWORD": masked_dashboard_password,
+        "LLM_MODEL": s.llm_model,
+        "LLM_BASE_URL": s.llm_base_url,
+        "LLM_QUICK_API_KEY": masked_llm_quick_api_key,
+        "LLM_DEEP_API_KEY": masked_llm_deep_api_key
+    })))
     .into_response()
 }
 
@@ -92,7 +103,8 @@ async fn update_config(
     State(state): State<Arc<AppState>>,
     axum::Json(payload): axum::Json<ConfigUpdateRequest>,
 ) -> Response {
-    let mut settings = state.settings.write();
+    let mut guard = state.settings.write();
+    let mut settings = (**guard).clone();
     if let Some(v) = payload.waf_port {
         settings.waf_port = v;
     }
@@ -115,26 +127,22 @@ async fn update_config(
         settings.llm_base_url = v;
     }
     settings.save_config();
+    *guard = Arc::new(settings);
     if let Err(e) = crate::core::engine::waf_engine::invalidate_all_rules_cache() {
         tracing::error!("Failed to invalidate WAF rules cache after config update: {}", e);
     }
-    Json(json!({"status": "success"})).into_response()
+    Json(ApiResponse::<()>::ok()).into_response()
 }
 
 async fn proxy_map(State(state): State<Arc<AppState>>) -> Response {
     let s = state.settings.read();
-    Json(json!({
-        "status": "success",
-        "data": s.proxy_map
-    }))
+    Json(ApiResponse::success(serde_json::json!({
+        "proxy_map": s.proxy_map
+    })))
     .into_response()
 }
 
 async fn cache_stats() -> Response {
     let stats = crate::core::engine::waf_engine::get_cache_stats();
-    Json(json!({
-        "status": "success",
-        "data": stats
-    }))
-    .into_response()
+    Json(ApiResponse::success(stats)).into_response()
 }

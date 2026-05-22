@@ -18,6 +18,12 @@ pub mod sync;
 #[cfg(feature = "cluster-mode")]
 pub mod threat_share;
 
+#[cfg(feature = "cluster-mode")]
+pub trait ClusterTransport {
+    async fn with_redis(&mut self, redis_url: &str) -> bool;
+    async fn broadcast_via_http(&self, endpoint: &str, data: &[u8]) -> Vec<Result<(), String>>;
+}
+
 const HEARTBEAT_INTERVAL_SECS: u64 = 10;
 const DEAD_NODE_THRESHOLD_SECS: u64 = 30;
 const DISCOVERY_PORT: u16 = 9527;
@@ -376,8 +382,10 @@ impl ClusterManager {
             );
 
             if *primary_id == self.node_id {
-                let mut role_guard = self.settings.write();
-                role_guard.cluster_role = ClusterRole::Primary;
+                let mut guard = self.settings.write();
+                let mut new_settings = (**guard).clone();
+                new_settings.cluster_role = ClusterRole::Primary;
+                *guard = Arc::new(new_settings);
             }
 
             if let Some(mut entry) = self.nodes.get_mut(primary_id) {
@@ -599,7 +607,7 @@ mod tests {
         settings.cluster_mode = true;
         settings.cluster_role = ClusterRole::Worker;
         settings.cluster_redis_url = None;
-        Arc::new(parking_lot::RwLock::new(settings))
+        Arc::new(parking_lot::RwLock::new(Arc::new(settings)))
     }
 
     #[tokio::test]

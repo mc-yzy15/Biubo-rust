@@ -61,6 +61,7 @@ pub async fn forward_request(
             UrlValidationResult::Localhost => "localhost".to_string(),
             UrlValidationResult::LinkLocal => "link-local address".to_string(),
             UrlValidationResult::Reserved => "reserved address".to_string(),
+            UrlValidationResult::DnsResolvesToPrivate => "DNS resolves to private IP".to_string(),
             UrlValidationResult::InvalidUrl => "invalid URL".to_string(),
             UrlValidationResult::Valid => unreachable!(),
         };

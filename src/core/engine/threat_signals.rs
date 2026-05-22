@@ -47,13 +47,14 @@ impl ThreatSignals {
 
     #[cfg(test)]
     pub fn combined_threat_score(&self) -> f64 {
-        let encoded_weight = if self.has_encoded_payload { 0.25 } else { 0.0 };
-        let progression_weight = if self.has_attack_progression { 0.25 } else { 0.0 };
-        let behavior_component = self.behavior_score * 0.2;
-        let reputation_component = self.reputation_score * 0.15;
+        let encoded_weight = if self.has_encoded_payload { 0.20 } else { 0.0 };
+        let progression_weight = if self.has_attack_progression { 0.20 } else { 0.0 };
+        let behavior_component = self.behavior_score * 0.18;
+        let reputation_component = self.reputation_score * 0.12;
         let progression_component = self.attack_progression_score * 0.15;
+        let encoded_component = self.encoded_content_ratio * 0.15;
 
-        (encoded_weight + progression_weight + behavior_component + reputation_component + progression_component).min(1.0)
+        (encoded_weight + progression_weight + behavior_component + reputation_component + progression_component + encoded_component).min(1.0)
     }
 }
 
@@ -193,10 +194,10 @@ pub fn compute_threat_signals(
 fn compute_behavior_score(headers: &HashMap<String, String>, body: &str) -> f64 {
     let mut score: f64 = 0.0;
 
-    let has_ua = headers.contains_key("user-agent");
-    let has_accept = headers.contains_key("accept");
-    let has_accept_lang = headers.contains_key("accept-language");
-    let has_referer = headers.contains_key("referer");
+    let has_ua = headers.keys().any(|k| k.eq_ignore_ascii_case("user-agent"));
+    let has_accept = headers.keys().any(|k| k.eq_ignore_ascii_case("accept"));
+    let has_accept_lang = headers.keys().any(|k| k.eq_ignore_ascii_case("accept-language"));
+    let has_referer = headers.keys().any(|k| k.eq_ignore_ascii_case("referer"));
 
     if !has_ua {
         score += 0.3;
@@ -208,7 +209,7 @@ fn compute_behavior_score(headers: &HashMap<String, String>, body: &str) -> f64 
         score += 0.1;
     }
 
-    if let Some(ua) = headers.get("user-agent") {
+    if let Some(ua) = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("user-agent")).map(|(_, v)| v.as_str()) {
         if is_suspicious_ua(ua) {
             score += 0.4;
         }
@@ -219,9 +220,12 @@ fn compute_behavior_score(headers: &HashMap<String, String>, body: &str) -> f64 
 
 fn is_suspicious_ua(ua: &str) -> bool {
     let suspicious_patterns = [
-        "sqlmap", "nikto", "nmap", "burp", "dirbuster", 
+        "sqlmap", "nikto", "nmap", "burp", "dirbuster",
         "gobuster", "nuclei", "wfuzz", "hydra", "curl/",
         "python-requests", "python-urllib", "go-http-client",
+        "httpx", "ffuf", "caido", "projectdiscovery",
+        "httpie", "arjun", "dirsearch", "zap", "skipfish",
+        "whatweb", "wappalyzer", "masscan", "rustscan",
     ];
 
     suspicious_patterns.iter().any(|p| ua.to_lowercase().contains(p))

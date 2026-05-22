@@ -408,6 +408,75 @@ impl ThreatIntelligenceShare {
     }
 }
 
+impl crate::cluster::ClusterTransport for ThreatIntelligenceShare {
+    async fn with_redis(&mut self, redis_url: &str) -> bool {
+        #[cfg(feature = "redis-support")]
+        {
+            match redis::Client::open(redis_url) {
+                Ok(client) => match client.get_connection_manager().await {
+                    Ok(manager) => {
+                        self.redis_client = Some(manager);
+                        tracing::info!("[ThreatShare] Redis connection established for threat intelligence sharing");
+                        true
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "[ThreatShare] Failed to connect to Redis for threat sharing: {}",
+                            e
+                        );
+                        false
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("[ThreatShare] Invalid Redis URL for threat sharing: {}", e);
+                    false
+                }
+            }
+        }
+        #[cfg(not(feature = "redis-support"))]
+        {
+            let _ = redis_url;
+            false
+        }
+    }
+
+    async fn broadcast_via_http(&self, endpoint: &str, data: &[u8]) -> Vec<Result<(), String>> {
+        let target_nodes = self
+            .manager
+            .get_active_nodes()
+            .into_iter()
+            .filter(|node| node.id != self.manager.node_id)
+            .collect::<Vec<_>>();
+
+        let mut results = Vec::new();
+
+        for node in &target_nodes {
+            let url = format!("http://{}{}", node.ip, endpoint);
+            match self
+                .http_client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("X-Cluster-Node-Id", &self.manager.node_id)
+                .body(data.to_vec())
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    results.push(Ok(()));
+                }
+                Ok(resp) => {
+                    results.push(Err(format!("HTTP {}", resp.status())));
+                }
+                Err(e) => {
+                    results.push(Err(e.to_string()));
+                }
+            }
+        }
+
+        results
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,7 +490,7 @@ mod tests {
         settings.cluster_mode = true;
         settings.cluster_role = ClusterRole::Worker;
         settings.cluster_redis_url = None;
-        Arc::new(parking_lot::RwLock::new(settings))
+        Arc::new(parking_lot::RwLock::new(Arc::new(settings)))
     }
 
     fn create_test_share() -> (Arc<ClusterManager>, ThreatIntelligenceShare) {

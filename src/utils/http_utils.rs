@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use crate::config::settings::IpHeaderConfig;
 use crate::utils::url_validator::is_ip_in_range;
 
+static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(reqwest::Client::new);
+
 pub static STRIP_RESP_HEADERS: &[&str] = &[
     "connection",
     "keep-alive",
@@ -19,21 +21,7 @@ pub static STRIP_RESP_HEADERS: &[&str] = &[
 ];
 
 pub fn get_client_ip(headers: &axum::http::HeaderMap, config: &IpHeaderConfig) -> String {
-    if config.state {
-        for header_name in &config.order {
-            if let Some(value) = headers.get(header_name) {
-                if let Ok(v) = value.to_str() {
-                    if header_name == "X-Forwarded-For" {
-                        if let Some(first) = v.split(',').next() {
-                            return first.trim().to_string();
-                        }
-                    }
-                    return v.to_string();
-                }
-            }
-        }
-    }
-    String::new()
+    get_client_ip_with_trust(headers, config, "")
 }
 
 pub fn get_client_ip_with_trust(
@@ -111,8 +99,7 @@ pub fn is_static_resource(url: &str, extensions: &HashSet<String>) -> bool {
 
 pub async fn get_ip_info(ip: &str) -> serde_json::Value {
     let url = format!("https://biubo.zplb.org.cn/api/ip?ip={}", ip);
-    let client = reqwest::Client::new();
-    match client
+    match HTTP_CLIENT
         .get(&url)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -152,8 +139,7 @@ pub async fn get_geo_info(city: &str, country: &str) -> serde_json::Value {
             "https://biubo.zplb.org.cn/api/geo?q={}",
             percent_encoding::utf8_percent_encode(&query, percent_encoding::NON_ALPHANUMERIC)
         );
-        let client = reqwest::Client::new();
-        match client
+        match HTTP_CLIENT
             .get(&url)
             .timeout(std::time::Duration::from_secs(5))
             .send()
@@ -165,8 +151,8 @@ pub async fn get_geo_info(city: &str, country: &str) -> serde_json::Value {
                         for loc in results {
                             if loc.get("location_type").and_then(|v| v.as_str()) == Some("city") {
                                 return serde_json::json!({
-                                    "lat": loc.get("latitude").and_then(|v| v.as_f64()).expect("City latitude is missing or not a number"),
-                                    "lon": loc.get("longitude").and_then(|v| v.as_f64()).expect("City longitude is missing or not a number")
+                                    "lat": loc.get("latitude").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                    "lon": loc.get("longitude").and_then(|v| v.as_f64()).unwrap_or(0.0)
                                 });
                             }
                         }
@@ -174,8 +160,8 @@ pub async fn get_geo_info(city: &str, country: &str) -> serde_json::Value {
                             if loc.get("location_type").and_then(|v| v.as_str()) == Some("country")
                             {
                                 return serde_json::json!({
-                                    "lat": loc.get("latitude").and_then(|v| v.as_f64()).expect("Country latitude is missing or not a number"),
-                                    "lon": loc.get("longitude").and_then(|v| v.as_f64()).expect("Country longitude is missing or not a number")
+                                    "lat": loc.get("latitude").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                    "lon": loc.get("longitude").and_then(|v| v.as_f64()).unwrap_or(0.0)
                                 });
                             }
                         }
@@ -194,8 +180,7 @@ pub async fn get_geo_info(city: &str, country: &str) -> serde_json::Value {
 #[cfg(test)]
 pub async fn get_ip_reputation(ip: &str) -> bool {
     let url = format!("https://biubo.zplb.org.cn/api/ip/reputation?ip={}", ip);
-    let client = reqwest::Client::new();
-    match client
+    match HTTP_CLIENT
         .get(&url)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -205,7 +190,7 @@ pub async fn get_ip_reputation(ip: &str) -> bool {
             Ok(v) => v
                 .get("safe")
                 .and_then(|s| s.as_bool())
-                .expect("IP reputation safe field is missing or not a boolean"),
+                .unwrap_or(false),
             Err(e) => {
                 tracing::warn!("get_ip_reputation failed for {}: {}", ip, e);
                 false
@@ -220,8 +205,7 @@ pub async fn get_ip_reputation(ip: &str) -> bool {
 
 #[allow(dead_code)]
 pub async fn verify_captcha(ticket: &str) -> bool {
-    let client = reqwest::Client::new();
-    match client
+    match HTTP_CLIENT
         .post("https://captcha.zplb.org.cn/api/verify")
         .json(&serde_json::json!({"ticket": ticket}))
         .timeout(std::time::Duration::from_secs(5))
@@ -232,7 +216,7 @@ pub async fn verify_captcha(ticket: &str) -> bool {
             Ok(v) => v
                 .get("success")
                 .and_then(|s| s.as_bool())
-                .expect("Captcha success field is missing or not a boolean"),
+                .unwrap_or(false),
             Err(e) => {
                 tracing::error!("Captcha verification failed: {}", e);
                 false

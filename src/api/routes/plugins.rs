@@ -3,6 +3,7 @@ use crate::api::app::AppState;
 use crate::plugins::{get_plugin_registry, loader::PluginLoader};
 #[cfg(not(feature = "plugin-system"))]
 use crate::plugins::get_plugin_registry;
+use crate::api::response::ApiResponse;
 use axum::Router;
 use axum::extract::Path;
 use axum::extract::State;
@@ -70,22 +71,18 @@ async fn list_plugins() -> Response {
 
 async fn enable_plugin(Path(name): Path<String>) -> Response {
     if name.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "Plugin name cannot be empty");
+        return ApiResponse::<()>::error("Plugin name cannot be empty").with_status(StatusCode::BAD_REQUEST);
     }
 
     let registry = get_plugin_registry();
 
     match registry.enable(&name) {
-        Ok(()) => Json(json!({
-            "status": "success",
-            "message": format!("Plugin '{}' enabled", name),
-        }))
-        .into_response(),
+        Ok(()) => Json(ApiResponse::<()>::ok_with_message(format!("Plugin '{}' enabled", name))).into_response(),
         Err(e) => {
             if e.contains("not found") {
-                error_response(StatusCode::NOT_FOUND, &e)
+                ApiResponse::<()>::error(&e).with_status(StatusCode::NOT_FOUND)
             } else {
-                error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)
+                ApiResponse::<()>::error(&e).with_status(StatusCode::INTERNAL_SERVER_ERROR)
             }
         }
     }
@@ -93,22 +90,18 @@ async fn enable_plugin(Path(name): Path<String>) -> Response {
 
 async fn disable_plugin(Path(name): Path<String>) -> Response {
     if name.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "Plugin name cannot be empty");
+        return ApiResponse::<()>::error("Plugin name cannot be empty").with_status(StatusCode::BAD_REQUEST);
     }
 
     let registry = get_plugin_registry();
 
     match registry.disable(&name) {
-        Ok(()) => Json(json!({
-            "status": "success",
-            "message": format!("Plugin '{}' disabled", name),
-        }))
-        .into_response(),
+        Ok(()) => Json(ApiResponse::<()>::ok_with_message(format!("Plugin '{}' disabled", name))).into_response(),
         Err(e) => {
             if e.contains("not found") {
-                error_response(StatusCode::NOT_FOUND, &e)
+                ApiResponse::<()>::error(&e).with_status(StatusCode::NOT_FOUND)
             } else {
-                error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)
+                ApiResponse::<()>::error(&e).with_status(StatusCode::INTERNAL_SERVER_ERROR)
             }
         }
     }
@@ -119,22 +112,18 @@ async fn update_plugin_config(
     Json(payload): Json<PluginConfigUpdate>,
 ) -> Response {
     if name.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "Plugin name cannot be empty");
+        return ApiResponse::<()>::error("Plugin name cannot be empty").with_status(StatusCode::BAD_REQUEST);
     }
 
     let registry = get_plugin_registry();
 
     match registry.update_config(&name, crate::plugins::types::PluginConfig::Generic(payload.config)) {
-        Ok(()) => Json(json!({
-            "status": "success",
-            "message": format!("Configuration for plugin '{}' updated", name),
-        }))
-        .into_response(),
+        Ok(()) => Json(ApiResponse::<()>::ok_with_message(format!("Configuration for plugin '{}' updated", name))).into_response(),
         Err(e) => {
             if e.contains("not found") {
-                error_response(StatusCode::NOT_FOUND, &e)
+                ApiResponse::<()>::error(&e).with_status(StatusCode::NOT_FOUND)
             } else {
-                error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)
+                ApiResponse::<()>::error(&e).with_status(StatusCode::INTERNAL_SERVER_ERROR)
             }
         }
     }
@@ -142,7 +131,7 @@ async fn update_plugin_config(
 
 async fn remove_plugin(Path(name): Path<String>) -> Response {
     if name.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "Plugin name cannot be empty");
+        return ApiResponse::<()>::error("Plugin name cannot be empty").with_status(StatusCode::BAD_REQUEST);
     }
 
     let registry = get_plugin_registry();
@@ -161,16 +150,12 @@ async fn remove_plugin(Path(name): Path<String>) -> Response {
     }
 
     match registry.unregister(&name) {
-        Ok(()) => Json(json!({
-            "status": "success",
-            "message": format!("Plugin '{}' removed", name),
-        }))
-        .into_response(),
+        Ok(()) => Json(ApiResponse::<()>::ok_with_message(format!("Plugin '{}' removed", name))).into_response(),
         Err(e) => {
             if e.contains("not found") {
-                error_response(StatusCode::NOT_FOUND, &e)
+                ApiResponse::<()>::error(&e).with_status(StatusCode::NOT_FOUND)
             } else {
-                error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)
+                ApiResponse::<()>::error(&e).with_status(StatusCode::INTERNAL_SERVER_ERROR)
             }
         }
     }
@@ -194,7 +179,7 @@ async fn reload_plugins(_state: State<Arc<AppState>>) -> Response {
     }
     #[cfg(not(feature = "plugin-system"))]
     {
-        error_response(StatusCode::SERVICE_UNAVAILABLE, "Plugin system is not enabled")
+        ApiResponse::<()>::error("Plugin system is not enabled").with_status(StatusCode::SERVICE_UNAVAILABLE)
     }
 }
 
@@ -213,15 +198,4 @@ fn serialize_config(config: &crate::plugins::types::PluginConfig) -> serde_json:
         }),
         crate::plugins::types::PluginConfig::Generic(map) => json!(map),
     }
-}
-
-fn error_response(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(json!({
-            "status": "error",
-            "message": message,
-        })),
-    )
-        .into_response()
 }

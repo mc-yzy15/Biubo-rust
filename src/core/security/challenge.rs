@@ -134,6 +134,13 @@ fn cleanup_used_tokens() {
     });
 }
 
+pub fn start_token_gc_worker() {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(60));
+        cleanup_used_tokens();
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

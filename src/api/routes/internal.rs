@@ -1,4 +1,5 @@
 use crate::api::app::AppState;
+use crate::api::response::ApiResponse;
 use crate::data::storage::manager::get_db;
 use crate::utils::compression::decompress_json;
 use crate::utils::query_parser::{evaluate, parse};
@@ -126,11 +127,11 @@ async fn greeting(
 ) -> Response {
     let request_id = match &payload.request_id {
         Some(id) if !id.is_empty() => id.clone(),
-        _ => return Json(json!({"status": "error", "msg": "request_id required"})).into_response(),
+        _ => return Json(ApiResponse::<()>::error("request_id required")).into_response(),
     };
     let host = match &payload.host {
         Some(h) if !h.is_empty() => h.clone(),
-        _ => return Json(json!({"status": "error", "msg": "host required"})).into_response(),
+        _ => return Json(ApiResponse::<()>::error("host required")).into_response(),
     };
 
     let mut updates = std::collections::HashMap::new();
@@ -166,7 +167,7 @@ async fn greeting(
         crate::core::session::manager::update_session_log(&request_id, &host, updates);
     }
 
-    Json(json!({"status": "success"})).into_response()
+    Json(ApiResponse::<()>::ok()).into_response()
 }
 
 async fn receive_screen_data(
@@ -175,11 +176,11 @@ async fn receive_screen_data(
 ) -> Response {
     let request_id = match &payload.request_id {
         Some(id) if !id.is_empty() => id.clone(),
-        _ => return Json(json!({"status": "error", "msg": "request_id required"})).into_response(),
+        _ => return Json(ApiResponse::<()>::error("request_id required")).into_response(),
     };
     let host = match &payload.host {
         Some(h) if !h.is_empty() => h.clone(),
-        _ => return Json(json!({"status": "error", "msg": "host required"})).into_response(),
+        _ => return Json(ApiResponse::<()>::error("host required")).into_response(),
     };
     let events = payload.events.unwrap_or_default();
 
@@ -187,7 +188,7 @@ async fn receive_screen_data(
         crate::core::session::manager::update_rrweb_events(&request_id, &host, events);
     }
 
-    Json(json!({"status": "success"})).into_response()
+    Json(ApiResponse::<()>::ok()).into_response()
 }
 
 async fn system_info(State(_state): State<Arc<AppState>>) -> Response {
@@ -206,28 +207,25 @@ async fn system_info(State(_state): State<Arc<AppState>>) -> Response {
         0.0
     };
 
-    Json(json!({
-        "status": "success",
-        "data": {
-            "os": format!("{} {}", System::name().unwrap_or_default(), System::os_version().unwrap_or_default()),
-            "cpu": {
-                "percent": cpu_percent,
-                "cores": cpu_cores,
-            },
-            "memory": {
-                "total_gb": (total_mem_gb * 100.0).round() / 100.0,
-                "used_gb": (used_mem_gb * 100.0).round() / 100.0,
-                "percent": (mem_percent * 100.0).round() / 100.0,
-            },
-        }
-    }))
+    Json(ApiResponse::success(serde_json::json!({
+        "os": format!("{} {}", System::name().unwrap_or_default(), System::os_version().unwrap_or_default()),
+        "cpu": {
+            "percent": cpu_percent,
+            "cores": cpu_cores,
+        },
+        "memory": {
+            "total_gb": (total_mem_gb * 100.0).round() / 100.0,
+            "used_gb": (used_mem_gb * 100.0).round() / 100.0,
+            "percent": (mem_percent * 100.0).round() / 100.0,
+        },
+    })))
     .into_response()
 }
 
 async fn waf_info(State(_state): State<Arc<AppState>>, Query(query): Query<HostQuery>) -> Response {
     let host = query.host.unwrap_or_default();
     if host.is_empty() {
-        return Json(json!({"status": "error", "msg": "host required"})).into_response();
+        return Json(ApiResponse::<()>::error("host required")).into_response();
     }
 
     let db = get_db(&host);
@@ -242,11 +240,7 @@ async fn waf_info(State(_state): State<Arc<AppState>>, Query(query): Query<HostQ
         map
     };
 
-    Json(json!({
-        "status": "success",
-        "data": ram_data
-    }))
-    .into_response()
+    Json(ApiResponse::success(serde_json::Value::Object(ram_data))).into_response()
 }
 
 async fn waf_setting(
@@ -255,39 +249,34 @@ async fn waf_setting(
 ) -> Response {
     let host = payload.get("host").and_then(|v| v.as_str()).unwrap_or("");
     if host.is_empty() {
-        return Json(json!({"status": "error", "msg": "host required"})).into_response();
+        return Json(ApiResponse::<()>::error("host required")).into_response();
     }
 
     let db = get_db(host);
 
+    let mut site = db
+        .ram_get("site")
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+
     if let Some(description) = payload.get("description").and_then(|v| v.as_str()) {
-        let mut site = db
-            .ram_get("site")
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default();
         site.insert("description".into(), json!(description));
-        db.ram_set("site", Value::Object(site));
     }
 
     if let Some(domain) = payload.get("domain").and_then(|v| v.as_str()) {
-        let mut site = db
-            .ram_get("site")
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default();
         site.insert("domain".into(), json!(domain));
-        db.ram_set("site", Value::Object(site));
     }
 
     if let Some(status) = payload.get("status").and_then(|v| v.as_str()) {
-        let mut site = db
-            .ram_get("site")
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default();
+        if !matches!(status, "on" | "off" | "pass") {
+            return Json(ApiResponse::<()>::error("status must be one of: on, off, pass")).into_response();
+        }
         site.insert("status".into(), json!(status));
-        db.ram_set("site", Value::Object(site));
     }
 
-    Json(json!({"status": "success"})).into_response()
+    db.ram_set("site", Value::Object(site));
+
+    Json(ApiResponse::<()>::ok()).into_response()
 }
 
 async fn server_location(State(_state): State<Arc<AppState>>) -> Response {
@@ -318,26 +307,23 @@ async fn server_location(State(_state): State<Arc<AppState>>) -> Response {
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
-    Json(json!({
-        "status": "success",
-        "data": {
-            "ip": ip,
-            "country": country,
-            "city": city,
-            "region": region,
-        }
-    }))
+    Json(ApiResponse::success(serde_json::json!({
+        "ip": ip,
+        "country": country,
+        "city": city,
+        "region": region,
+    })))
     .into_response()
 }
 
 async fn ipinfo(Query(query): Query<IpQuery>) -> Response {
     let ip = query.ip.unwrap_or_default();
     if ip.is_empty() {
-        return Json(json!({"status": "error", "msg": "ip required"})).into_response();
+        return Json(ApiResponse::<()>::error("ip required")).into_response();
     }
 
     let info = crate::utils::http_utils::get_ip_info(&ip).await;
-    Json(json!({"status": "success", "data": info})).into_response()
+    Json(ApiResponse::success(info)).into_response()
 }
 
 async fn geocode(Query(query): Query<GeocodeQuery>) -> Response {
@@ -345,11 +331,11 @@ async fn geocode(Query(query): Query<GeocodeQuery>) -> Response {
     let country = query.country.unwrap_or_default();
 
     if city.is_empty() && country.is_empty() {
-        return Json(json!({"status": "error", "msg": "city or country required"})).into_response();
+        return Json(ApiResponse::<()>::error("city or country required")).into_response();
     }
 
     let info = crate::utils::http_utils::get_geo_info(&city, &country).await;
-    Json(json!({"status": "success", "data": info})).into_response()
+    Json(ApiResponse::success(info)).into_response()
 }
 
 async fn waf_log(State(_state): State<Arc<AppState>>, Query(query): Query<DateQuery>) -> Response {
@@ -359,30 +345,19 @@ async fn waf_log(State(_state): State<Arc<AppState>>, Query(query): Query<DateQu
         .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
 
     if host.is_empty() {
-        return Json(json!({"status": "error", "msg": "host required"})).into_response();
+        return Json(ApiResponse::<()>::error("host required")).into_response();
     }
 
     let db = get_db(&host);
-    let _ = db.ensure_log_db();
+    let logs = db.get_logs();
+    let overview = db.get_log_db()
+        .and_then(|ldb| ldb.get("overview"))
+        .unwrap_or(json!({}));
 
-    let log_db = match db.get_log_db() {
-        Some(ldb) => ldb,
-        None => return Json(json!({"status": "success", "data": []})).into_response(),
-    };
-
-    let logs = log_db
-        .get("logs")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    let overview = log_db.get("overview").unwrap_or(json!({}));
-
-    Json(json!({
-        "status": "success",
-        "data": {
-            "logs": logs,
-            "overview": overview,
-        }
-    }))
+    Json(ApiResponse::success(serde_json::json!({
+        "logs": logs,
+        "overview": overview,
+    })))
     .into_response()
 }
 
@@ -394,22 +369,11 @@ async fn waf_rrweb(
     let id = query.id.unwrap_or_default();
 
     if host.is_empty() || id.is_empty() {
-        return Json(json!({"status": "error", "msg": "host and id required"})).into_response();
+        return Json(ApiResponse::<()>::error("host and id required")).into_response();
     }
 
     let db = get_db(&host);
-    let log_db = match db.get_log_db() {
-        Some(ldb) => ldb,
-        None => return Json(json!({"status": "success", "data": null})).into_response(),
-    };
-
-    let logs = log_db
-        .get("logs")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    let entry = logs
-        .iter()
-        .find(|e| e.get("request_id").and_then(|v| v.as_str()) == Some(&id));
+    let entry = db.find_log_by_request_id(&id);
 
     let rrweb = entry
         .and_then(|e| e.get("rrweb").cloned())
@@ -425,7 +389,7 @@ async fn waf_rrweb(
         json!([])
     };
 
-    Json(json!({"status": "success", "data": events})).into_response()
+    Json(ApiResponse::success(events)).into_response()
 }
 
 async fn waf_search(
@@ -436,35 +400,26 @@ async fn waf_search(
     let statement = query.statement.unwrap_or_default();
 
     if host.is_empty() {
-        return Json(json!({"status": "error", "msg": "host required"})).into_response();
+        return Json(ApiResponse::<()>::error("host required")).into_response();
     }
 
     let db = get_db(&host);
-    let log_db = match db.get_log_db() {
-        Some(ldb) => ldb,
-        None => return Json(json!({"status": "success", "data": []})).into_response(),
-    };
-
-    let logs = log_db
-        .get("logs")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
+    let logs = db.get_logs();
 
     if statement.is_empty() {
-        return Json(json!({"status": "success", "data": logs})).into_response();
+        return Json(ApiResponse::success(logs)).into_response();
     }
 
     let ast = match parse(&statement) {
         Ok(a) => a,
         Err(e) => {
-            return Json(json!({"status": "error", "msg": format!("Parse error: {}", e)}))
-                .into_response();
+            return Json(ApiResponse::<()>::error(format!("Parse error: {}", e))).into_response();
         }
     };
 
     let results: Vec<Value> = logs.iter().filter(|r| evaluate(&ast, r)).cloned().collect();
 
-    Json(json!({"status": "success", "data": results})).into_response()
+    Json(ApiResponse::success(results)).into_response()
 }
 
 async fn waf_blacklist(
@@ -473,7 +428,7 @@ async fn waf_blacklist(
 ) -> Response {
     let host = query.host.unwrap_or_default();
     if host.is_empty() {
-        return Json(json!({"status": "error", "msg": "host required"})).into_response();
+        return Json(ApiResponse::<()>::error("host required")).into_response();
     }
 
     let db = get_db(&host);
@@ -482,7 +437,7 @@ async fn waf_blacklist(
         .and_then(|v| v.get("blacklist").cloned())
         .unwrap_or(json!({}));
 
-    Json(json!({"status": "success", "data": blacklist})).into_response()
+    Json(ApiResponse::success(blacklist)).into_response()
 }
 
 async fn waf_unban(
@@ -493,16 +448,16 @@ async fn waf_unban(
     let ip = query.ip.unwrap_or_default();
 
     if host.is_empty() || ip.is_empty() {
-        return Json(json!({"status": "error", "msg": "host and ip required"})).into_response();
+        return Json(ApiResponse::<()>::error("host and ip required")).into_response();
     }
 
     let db = get_db(&host);
     let removed = db.unban_ip(&ip);
 
     if removed {
-        Json(json!({"status": "success"})).into_response()
+        Json(ApiResponse::<()>::ok()).into_response()
     } else {
-        Json(json!({"status": "error", "msg": "IP not in blacklist"})).into_response()
+        Json(ApiResponse::<()>::error("IP not in blacklist")).into_response()
     }
 }
 
@@ -512,7 +467,7 @@ async fn waf_whitelist(
 ) -> Response {
     let host = query.host.unwrap_or_default();
     if host.is_empty() {
-        return Json(json!({"status": "error", "msg": "host required"})).into_response();
+        return Json(ApiResponse::<()>::error("host required")).into_response();
     }
 
     let db = get_db(&host);
@@ -521,7 +476,7 @@ async fn waf_whitelist(
         .and_then(|v| v.get("whitelist").cloned())
         .unwrap_or(json!({}));
 
-    Json(json!({"status": "success", "data": whitelist})).into_response()
+    Json(ApiResponse::success(whitelist)).into_response()
 }
 
 async fn waf_remove_whitelist(
@@ -532,16 +487,16 @@ async fn waf_remove_whitelist(
     let ip = query.ip.unwrap_or_default();
 
     if host.is_empty() || ip.is_empty() {
-        return Json(json!({"status": "error", "msg": "host and ip required"})).into_response();
+        return Json(ApiResponse::<()>::error("host and ip required")).into_response();
     }
 
     let db = get_db(&host);
     let removed = db.remove_whitelist(&ip);
 
     if removed {
-        Json(json!({"status": "success"})).into_response()
+        Json(ApiResponse::<()>::ok()).into_response()
     } else {
-        Json(json!({"status": "error", "msg": "IP not in whitelist"})).into_response()
+        Json(ApiResponse::<()>::error("IP not in whitelist")).into_response()
     }
 }
 
@@ -554,13 +509,13 @@ async fn add_whitelist(
     let remark = payload.remark.unwrap_or_else(|| "manual".to_string());
 
     if host.is_empty() || ip.is_empty() {
-        return Json(json!({"status": "error", "msg": "host and ip required"})).into_response();
+        return Json(ApiResponse::<()>::error("host and ip required")).into_response();
     }
 
     let db = get_db(&host);
     db.add_whitelist(&ip, &remark);
 
-    Json(json!({"status": "success"})).into_response()
+    Json(ApiResponse::<()>::ok()).into_response()
 }
 
 async fn add_blacklist(
@@ -572,11 +527,11 @@ async fn add_blacklist(
     let reason = payload.reason.unwrap_or_else(|| "manual".to_string());
 
     if host.is_empty() || ip.is_empty() {
-        return Json(json!({"status": "error", "msg": "host and ip required"})).into_response();
+        return Json(ApiResponse::<()>::error("host and ip required")).into_response();
     }
 
     let db = get_db(&host);
     db.ban_ip(&ip, &reason, payload.expire).await;
 
-    Json(json!({"status": "success"})).into_response()
+    Json(ApiResponse::<()>::ok()).into_response()
 }

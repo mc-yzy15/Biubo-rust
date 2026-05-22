@@ -140,10 +140,12 @@ impl ReputationAggregator {
                     100.0
                 } else if score_100 >= 79.0 {
                     60.0
+                } else if score_100 >= 40.0 {
+                    50.0
                 } else if score_100 >= 1.0 {
-                    0.0
-                } else {
                     20.0
+                } else {
+                    10.0
                 }
             }
             "VirusTotal" => {
@@ -286,8 +288,9 @@ mod aggregator_tests {
     fn test_normalize_greynoise() {
         assert!((ReputationAggregator::normalize_score("GreyNoise", 1.0) - 100.0).abs() < f64::EPSILON);
         assert!((ReputationAggregator::normalize_score("GreyNoise", 0.8) - 60.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("GreyNoise", 0.0) - 20.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("GreyNoise", 0.5) - 0.0).abs() < f64::EPSILON);
+        assert!((ReputationAggregator::normalize_score("GreyNoise", 0.5) - 50.0).abs() < f64::EPSILON);
+        assert!((ReputationAggregator::normalize_score("GreyNoise", 0.01) - 20.0).abs() < f64::EPSILON);
+        assert!((ReputationAggregator::normalize_score("GreyNoise", 0.0) - 10.0).abs() < f64::EPSILON);
     }
 
     #[test]

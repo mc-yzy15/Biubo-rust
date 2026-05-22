@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::models::{ClusterRole, WafApiKey};
 use crate::data::storage::StorageDriverType;
 
-pub type SharedSettings = Arc<RwLock<Settings>>;
+pub type SharedSettings = Arc<RwLock<Arc<Settings>>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpHeaderConfig {
@@ -103,6 +103,11 @@ pub struct Settings {
     pub waf_api_keys: Vec<WafApiKey>,
 
     pub auto_patch_enabled: bool,
+
+    pub internal_api_key: String,
+    pub cluster_shared_secret: String,
+    pub init_token: String,
+    pub initialized: bool,
 }
 
 fn generate_challenge_secret() -> String {
@@ -119,6 +124,15 @@ fn generate_random_password() -> String {
     hasher.update(uuid::Uuid::new_v4().as_bytes());
     hasher.update(chrono::Utc::now().timestamp().to_string().as_bytes());
     hex::encode(hasher.finalize())[..16].to_string()
+}
+
+fn generate_random_secret() -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(uuid::Uuid::new_v4().as_bytes());
+    hasher.update(uuid::Uuid::new_v4().as_bytes());
+    hasher.update(chrono::Utc::now().timestamp().to_string().as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 impl Default for Settings {
@@ -219,6 +233,11 @@ impl Default for Settings {
             waf_api_keys: Vec::new(),
 
             auto_patch_enabled: false,
+
+            internal_api_key: generate_random_secret(),
+            cluster_shared_secret: generate_random_secret(),
+            init_token: generate_random_secret(),
+            initialized: false,
         }
     }
 }
@@ -269,6 +288,10 @@ struct PersistedConfig {
     waf_api_enabled: Option<bool>,
     waf_api_keys: Option<Vec<WafApiKey>>,
     auto_patch_enabled: Option<bool>,
+    internal_api_key: Option<String>,
+    cluster_shared_secret: Option<String>,
+    init_token: Option<String>,
+    initialized: Option<bool>,
 }
 
 impl Settings {
@@ -277,6 +300,18 @@ impl Settings {
 
         settings.load_config_file();
         settings.apply_env_vars();
+
+        if !settings.dashboard_password.is_empty() && !settings.dashboard_password.starts_with("$2") {
+            match crate::utils::crypto::hash_password(&settings.dashboard_password) {
+                Ok(hashed) => {
+                    tracing::info!("Dashboard password auto-hashed from plaintext to bcrypt");
+                    settings.dashboard_password = hashed;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to auto-hash dashboard password: {}", e);
+                }
+            }
+        }
 
         settings
     }
@@ -345,7 +380,7 @@ impl Settings {
     }
 
     pub fn is_initialized(&self) -> bool {
-        !self.proxy_map.is_empty()
+        self.initialized
     }
 
     pub fn save_config(&self) {
@@ -372,7 +407,11 @@ impl Settings {
             "SSL_DOMAINS": self.ssl_domains,
             "SSL_ACME_EMAIL": self.ssl_acme_email,
             "SSL_CERT_DIR": self.ssl_cert_dir.to_string_lossy(),
-            "SSL_PORT": self.ssl_port
+            "SSL_PORT": self.ssl_port,
+            "INTERNAL_API_KEY": self.internal_api_key,
+            "CLUSTER_SHARED_SECRET": self.cluster_shared_secret,
+            "INIT_TOKEN": self.init_token,
+            "INITIALIZED": self.initialized
         });
 
         match fs::write(
@@ -440,6 +479,18 @@ impl Settings {
                     }
                     if let Some(v) = cfg.ssl_port {
                         self.ssl_port = v;
+                    }
+                    if let Some(v) = cfg.internal_api_key {
+                        self.internal_api_key = v;
+                    }
+                    if let Some(v) = cfg.cluster_shared_secret {
+                        self.cluster_shared_secret = v;
+                    }
+                    if let Some(v) = cfg.init_token {
+                        self.init_token = v;
+                    }
+                    if let Some(v) = cfg.initialized {
+                        self.initialized = v;
                     }
                 }
                 Err(e) => tracing::error!("Failed to parse config.json: {}", e),

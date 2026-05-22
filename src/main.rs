@@ -41,7 +41,7 @@ async fn main() {
     plugins::init_plugins();
 
     let settings: SharedSettings = match Settings::load_and_validate() {
-        Ok(s) => Arc::new(parking_lot::RwLock::new(s)),
+        Ok(s) => Arc::new(parking_lot::RwLock::new(Arc::new(s))),
         Err(e) => {
             tracing::error!("Configuration validation failed: {}", e);
             std::process::exit(1);
@@ -70,6 +70,8 @@ async fn main() {
     core::session::manager::start_log_gc_worker(settings.clone());
     core::engine::waf_engine::start_cache_gc_worker(cache_ttl, cache_gc_interval);
     core::security::rate_limit::start_rate_gc_worker(rate_gc_interval);
+    core::security::challenge::start_token_gc_worker();
+    crate::api::routes::proxy::start_strike_gc_worker();
 
     let host_count = settings.read().proxy_map.keys().count();
     if host_count > 0 {

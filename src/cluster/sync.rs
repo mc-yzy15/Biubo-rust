@@ -306,23 +306,25 @@ impl ConfigSync {
                 Ok(())
             }
             "settings" => {
-                let new_settings: serde_json::Value = serde_json::from_str(&update.payload)
+                let new_settings_val: serde_json::Value = serde_json::from_str(&update.payload)
                     .map_err(|e| format!("Invalid settings JSON: {}", e))?;
 
-                let mut settings = self.settings.write();
-                if let Some(port) = new_settings.get("waf_port").and_then(|v| v.as_u64()) {
+                let mut guard = self.settings.write();
+                let mut settings = (**guard).clone();
+                if let Some(port) = new_settings_val.get("waf_port").and_then(|v| v.as_u64()) {
                     settings.waf_port = port as u16;
                 }
-                if let Some(proxy_map) = new_settings.get("proxy_map").and_then(|v| v.as_object()) {
+                if let Some(proxy_map) = new_settings_val.get("proxy_map").and_then(|v| v.as_object()) {
                     settings.proxy_map = proxy_map
                         .iter()
                         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                         .collect();
                 }
-                if let Some(path) = new_settings.get("dashboard_path").and_then(|v| v.as_str()) {
+                if let Some(path) = new_settings_val.get("dashboard_path").and_then(|v| v.as_str()) {
                     settings.dashboard_path = path.to_string();
                 }
                 settings.save_config();
+                *guard = Arc::new(settings);
                 tracing::info!("[ConfigSync] Settings applied from primary node");
                 Ok(())
             }
@@ -488,6 +490,65 @@ impl ConfigSync {
     }
 }
 
+impl crate::cluster::ClusterTransport for ConfigSync {
+    async fn with_redis(&mut self, redis_url: &str) -> bool {
+        #[cfg(feature = "redis-support")]
+        {
+            match redis::Client::open(redis_url) {
+                Ok(client) => match client.get_connection_manager().await {
+                    Ok(manager) => {
+                        self.redis_client = Some(manager);
+                        tracing::info!("[ConfigSync] Redis connection established for config sync");
+                        true
+                    }
+                    Err(e) => {
+                        tracing::warn!("[ConfigSync] Failed to connect to Redis for config sync: {}", e);
+                        false
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("[ConfigSync] Invalid Redis URL for config sync: {}", e);
+                    false
+                }
+            }
+        }
+        #[cfg(not(feature = "redis-support"))]
+        {
+            let _ = redis_url;
+            false
+        }
+    }
+
+    async fn broadcast_via_http(&self, endpoint: &str, data: &[u8]) -> Vec<Result<(), String>> {
+        let target_nodes = self.get_target_nodes();
+        let mut results = Vec::new();
+
+        for node in &target_nodes {
+            let url = format!("http://{}{}", node.ip, endpoint);
+            match self.http_client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("X-Cluster-Node-Id", &self.manager.node_id)
+                .body(data.to_vec())
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    results.push(Ok(()));
+                }
+                Ok(resp) => {
+                    results.push(Err(format!("HTTP {}", resp.status())));
+                }
+                Err(e) => {
+                    results.push(Err(e.to_string()));
+                }
+            }
+        }
+
+        results
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,14 +562,16 @@ mod tests {
         settings.cluster_mode = true;
         settings.cluster_role = ClusterRole::Worker;
         settings.cluster_redis_url = None;
-        Arc::new(parking_lot::RwLock::new(settings))
+        Arc::new(parking_lot::RwLock::new(Arc::new(settings)))
     }
 
     fn create_test_sync(role: ClusterRole) -> (Arc<ClusterManager>, ConfigSync) {
         let settings = create_test_settings();
         {
-            let mut s = settings.write();
+            let mut guard = settings.write();
+            let mut s = (**guard).clone();
             s.cluster_role = role.clone();
+            *guard = Arc::new(s);
         }
         let manager = Arc::new(ClusterManager::new(settings.clone()));
         let sync = ConfigSync::new(manager.clone(), settings.clone());
@@ -574,8 +637,10 @@ mod tests {
     async fn test_broadcast_with_registered_nodes() {
         let settings = create_test_settings();
         {
-            let mut s = settings.write();
+            let mut guard = settings.write();
+            let mut s = (**guard).clone();
             s.cluster_role = ClusterRole::Primary;
+            *guard = Arc::new(s);
         }
         let manager = Arc::new(ClusterManager::new(settings.clone()));
 
@@ -816,8 +881,10 @@ mod tests {
     async fn test_get_target_nodes_excludes_self() {
         let settings = create_test_settings();
         {
-            let mut s = settings.write();
+            let mut guard = settings.write();
+            let mut s = (**guard).clone();
             s.cluster_role = ClusterRole::Primary;
+            *guard = Arc::new(s);
         }
         let manager = Arc::new(ClusterManager::new(settings.clone()));
 
@@ -842,8 +909,10 @@ mod tests {
     async fn test_get_target_nodes_excludes_dead_nodes() {
         let settings = create_test_settings();
         {
-            let mut s = settings.write();
+            let mut guard = settings.write();
+            let mut s = (**guard).clone();
             s.cluster_role = ClusterRole::Primary;
+            *guard = Arc::new(s);
         }
         let manager = Arc::new(ClusterManager::new(settings.clone()));
 

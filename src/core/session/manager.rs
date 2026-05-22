@@ -44,6 +44,8 @@ struct Session {
 static SESSIONS: once_cell::sync::Lazy<DashMap<String, Session>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
+const MAX_SESSIONS: usize = 100000;
+
 pub fn build_log_entry(
     request_id: &str,
     snapshot: &HashMap<String, serde_json::Value>,
@@ -89,6 +91,11 @@ pub fn build_log_entry(
 }
 
 pub fn create_session(request_id: &str, host: &str, log_entry: LogEntry) {
+    if SESSIONS.len() >= MAX_SESSIONS {
+        tracing::warn!("Session limit reached ({}), rejecting new session for {}", MAX_SESSIONS, request_id);
+        return;
+    }
+
     let session = Session {
         timestamp: std::time::Instant::now(),
         host: host.to_string(),
@@ -244,25 +251,26 @@ fn flush_session(sid: &str, session: &Session) {
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!([]));
             if rrweb_val.is_array() {
-                let arr = rrweb_val.as_array().unwrap();
-                if !arr.is_empty() {
-                    let first_ts = arr[0]
-                        .get("timestamp")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
-                    let last_ts = arr
-                        .last()
-                        .and_then(|e| e.get("timestamp"))
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
-                    log_value["duration_sec"] =
-                        serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
-                    log_value["rrweb"] = serde_json::json!(String::from_utf8_lossy(&compress_json(
-                        &serde_json::json!({"events": arr})
-                    ))
-                    .to_string());
-                } else {
-                    log_value["rrweb"] = serde_json::json!("");
+                if let Some(arr) = rrweb_val.as_array() {
+                    if !arr.is_empty() {
+                        let first_ts = arr[0]
+                            .get("timestamp")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
+                        let last_ts = arr
+                            .last()
+                            .and_then(|e| e.get("timestamp"))
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
+                        log_value["duration_sec"] =
+                            serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
+                        log_value["rrweb"] = serde_json::json!(String::from_utf8_lossy(&compress_json(
+                            &serde_json::json!({"events": arr})
+                        ))
+                        .to_string());
+                    } else {
+                        log_value["rrweb"] = serde_json::json!("");
+                    }
                 }
             } else {
                 log_value["rrweb"] = serde_json::json!("");
@@ -274,7 +282,7 @@ fn flush_session(sid: &str, session: &Session) {
         }
     }
 
-    db.write_log(log_value);
+    db.write_log_direct(log_value);
     tracing::debug!("Session flushed: {}", sid);
 }
 

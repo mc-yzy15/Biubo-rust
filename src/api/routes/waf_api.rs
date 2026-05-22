@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use crate::api::app::AppState;
 use crate::api::middleware::api_key_auth::{check_permission, get_api_key_from_headers};
+use crate::api::response::ApiResponse;
 use crate::data::storage::manager::get_db;
+use crate::utils::RoundTo;
 
 #[derive(Debug, Deserialize)]
 struct CheckRequest {
@@ -84,6 +86,10 @@ struct ThreatEntry {
     threat_type: String,
 }
 
+fn get_default_db() -> std::sync::Arc<crate::data::storage::manager::ProxyDB> {
+    get_db("default")
+}
+
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/check", post(handle_check))
@@ -103,32 +109,19 @@ async fn handle_check(
     let api_key = match get_api_key_from_headers(&headers) {
         Some(key) => key,
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"status": "error", "message": "Missing API key"})),
-            )
-                .into_response();
+            return ApiResponse::<()>::error("Missing API key").with_status(StatusCode::UNAUTHORIZED);
         }
     };
 
     if !check_permission(&api_key, "read", &state) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"status": "error", "message": "Insufficient permissions"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("Insufficient permissions").with_status(StatusCode::FORBIDDEN);
     }
 
     if payload.ip.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"status": "error", "message": "IP address is required"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("IP address is required").with_status(StatusCode::BAD_REQUEST);
     }
 
-    let host = "default";
-    let db = get_db(host);
+    let db = get_default_db();
     let is_blocked = db.is_banned(&payload.ip);
     let is_whitelisted = db.is_whitelisted(&payload.ip);
 
@@ -142,14 +135,9 @@ async fn handle_check(
     }
 
     let block_reason = if is_blocked {
-        let security = db.ram_get("security");
-        security
-            .as_ref()
-            .and_then(|v| v.get("blacklist"))
-            .and_then(|bl| bl.get(&payload.ip))
-            .and_then(|r| r.get("reason"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+        db.get_ban_record(&payload.ip)
+            .and_then(|r| r.get("reason").cloned())
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
     } else {
         None
     };
@@ -191,28 +179,16 @@ async fn handle_report(
     let api_key = match get_api_key_from_headers(&headers) {
         Some(key) => key,
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"status": "error", "message": "Missing API key"})),
-            )
-                .into_response();
+            return ApiResponse::<()>::error("Missing API key").with_status(StatusCode::UNAUTHORIZED);
         }
     };
 
     if !check_permission(&api_key, "write", &state) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"status": "error", "message": "Insufficient permissions"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("Insufficient permissions").with_status(StatusCode::FORBIDDEN);
     }
 
     if payload.ip.is_empty() || payload.event_type.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"status": "error", "message": "IP and event_type are required"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("IP and event_type are required").with_status(StatusCode::BAD_REQUEST);
     }
 
     let behavior_score = get_behavior_score(&payload.ip);
@@ -247,8 +223,7 @@ async fn handle_report(
         "recommended_action": recommended_action,
     });
 
-    let host = "default";
-    let db = get_db(host);
+    let db = get_default_db();
     db.write_log(log_entry);
 
     Json(ReportResponse {
@@ -265,43 +240,25 @@ async fn handle_threat(
     let api_key = match get_api_key_from_headers(&headers) {
         Some(key) => key,
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"status": "error", "message": "Missing API key"})),
-            )
-                .into_response();
+            return ApiResponse::<()>::error("Missing API key").with_status(StatusCode::UNAUTHORIZED);
         }
     };
 
     if !check_permission(&api_key, "read", &state) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"status": "error", "message": "Insufficient permissions"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("Insufficient permissions").with_status(StatusCode::FORBIDDEN);
     }
 
     if ip.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"status": "error", "message": "IP address is required"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("IP address is required").with_status(StatusCode::BAD_REQUEST);
     }
 
-    let host = "default";
-    let db = get_db(host);
+    let db = get_default_db();
     let is_blocked = db.is_banned(&ip);
 
     let block_reason = if is_blocked {
-        let security = db.ram_get("security");
-        security
-            .as_ref()
-            .and_then(|v| v.get("blacklist"))
-            .and_then(|bl| bl.get(&ip))
-            .and_then(|r| r.get("reason"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+        db.get_ban_record(&ip)
+            .and_then(|r| r.get("reason").cloned())
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
     } else {
         None
     };
@@ -330,35 +287,22 @@ async fn handle_block(
     let api_key = match get_api_key_from_headers(&headers) {
         Some(key) => key,
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"status": "error", "message": "Missing API key"})),
-            )
-                .into_response();
+            return ApiResponse::<()>::error("Missing API key").with_status(StatusCode::UNAUTHORIZED);
         }
     };
 
     if !check_permission(&api_key, "block", &state) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"status": "error", "message": "Insufficient permissions"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("Insufficient permissions").with_status(StatusCode::FORBIDDEN);
     }
 
     if payload.ip.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"status": "error", "message": "IP address is required"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("IP address is required").with_status(StatusCode::BAD_REQUEST);
     }
 
     let reason = payload.reason.unwrap_or_else(|| "manual_block".to_string());
     let duration_minutes = payload.duration_hours.map(|h| (h * 60) as u32);
 
-    let host = "default";
-    let db = get_db(host);
+    let db = get_default_db();
 
     let expires_at = if let Some(minutes) = duration_minutes {
         let now = Utc::now();
@@ -385,32 +329,19 @@ async fn handle_unblock(
     let api_key = match get_api_key_from_headers(&headers) {
         Some(key) => key,
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"status": "error", "message": "Missing API key"})),
-            )
-                .into_response();
+            return ApiResponse::<()>::error("Missing API key").with_status(StatusCode::UNAUTHORIZED);
         }
     };
 
     if !check_permission(&api_key, "block", &state) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"status": "error", "message": "Insufficient permissions"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("Insufficient permissions").with_status(StatusCode::FORBIDDEN);
     }
 
     if payload.ip.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"status": "error", "message": "IP address is required"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("IP address is required").with_status(StatusCode::BAD_REQUEST);
     }
 
-    let host = "default";
-    let db = get_db(host);
+    let db = get_default_db();
     let unblocked = db.unban_ip(&payload.ip);
 
     Json(UnblockResponse { unblocked })
@@ -424,20 +355,12 @@ async fn handle_stats(
     let api_key = match get_api_key_from_headers(&headers) {
         Some(key) => key,
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"status": "error", "message": "Missing API key"})),
-            )
-                .into_response();
+            return ApiResponse::<()>::error("Missing API key").with_status(StatusCode::UNAUTHORIZED);
         }
     };
 
     if !check_permission(&api_key, "stats", &state) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"status": "error", "message": "Insufficient permissions"})),
-        )
-            .into_response();
+        return ApiResponse::<()>::error("Insufficient permissions").with_status(StatusCode::FORBIDDEN);
     }
 
     let total_requests = get_total_requests();
@@ -461,29 +384,20 @@ async fn handle_stats(
 }
 
 fn get_reputation_score(ip: &str) -> f64 {
-    let host = "default";
-    let db = get_db(host);
-    
-    let security = db.ram_get("security");
-    if let Some(sec) = security {
-        if let Some(bl) = sec.get("blacklist") {
-            if let Some(record) = bl.get(ip) {
-                if let Some(reputation) = record.get("reputation_score") {
-                    if let Some(score) = reputation.as_f64() {
-                        return score.round_to(2);
-                    }
-                }
-            }
+    let db = get_default_db();
+
+    if let Some(record) = db.get_ban_record(ip) {
+        if let Some(score) = record.get("reputation_score").and_then(|v| v.as_f64()) {
+            return score.round_to(2);
         }
     }
-    
+
     50.0
 }
 
 fn get_behavior_score(ip: &str) -> f64 {
-    let host = "default";
-    let db = get_db(host);
-    
+    let db = get_default_db();
+
     let analytics = db.ram_get("analytics");
     if let Some(an) = analytics {
         if let Some(security) = an.get("security") {
@@ -496,7 +410,7 @@ fn get_behavior_score(ip: &str) -> f64 {
             }
         }
     }
-    
+
     30.0
 }
 
@@ -523,9 +437,8 @@ fn build_detections_list(_ip: &str, reputation_score: f64, behavior_score: f64, 
 }
 
 fn get_total_requests() -> u64 {
-    let host = "default";
-    let db = get_db(host);
-    
+    let db = get_default_db();
+
     let analytics = db.ram_get("analytics");
     if let Some(an) = analytics {
         if let Some(traffic) = an.get("traffic") {
@@ -538,14 +451,13 @@ fn get_total_requests() -> u64 {
             }
         }
     }
-    
+
     0
 }
 
 fn get_blocked_requests() -> u64 {
-    let host = "default";
-    let db = get_db(host);
-    
+    let db = get_default_db();
+
     let analytics = db.ram_get("analytics");
     if let Some(an) = analytics {
         if let Some(security) = an.get("security") {
@@ -556,14 +468,13 @@ fn get_blocked_requests() -> u64 {
             }
         }
     }
-    
+
     0
 }
 
 fn get_top_threats() -> Vec<ThreatEntry> {
-    let host = "default";
-    let db = get_db(host);
-    
+    let db = get_default_db();
+
     let analytics = db.ram_get("analytics");
     let mut threats = Vec::new();
 
@@ -587,19 +498,8 @@ fn get_top_threats() -> Vec<ThreatEntry> {
 
     threats.sort_by(|a, b| b.count.cmp(&a.count));
     threats.truncate(10);
-    
+
     threats
-}
-
-trait RoundTo {
-    fn round_to(self, decimals: u32) -> f64;
-}
-
-impl RoundTo for f64 {
-    fn round_to(self, decimals: u32) -> f64 {
-        let factor = 10f64.powi(decimals as i32);
-        (self * factor).round() / factor
-    }
 }
 
 #[cfg(test)]
@@ -846,4 +746,3 @@ mod tests {
         assert_eq!(action_high, "block");
     }
 }
-

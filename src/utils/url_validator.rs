@@ -8,6 +8,7 @@ pub enum UrlValidationResult {
     Localhost,
     LinkLocal,
     Reserved,
+    DnsResolvesToPrivate,
     InvalidUrl,
 }
 
@@ -36,6 +37,16 @@ pub fn validate_target_url(url: &str) -> UrlValidationResult {
         if is_reserved(&ip) {
             return UrlValidationResult::Reserved;
         }
+    } else if let Some(resolved_ip) = resolve_host(host) {
+        if is_private_ip(&resolved_ip) {
+            return UrlValidationResult::DnsResolvesToPrivate;
+        }
+        if is_link_local(&resolved_ip) {
+            return UrlValidationResult::LinkLocal;
+        }
+        if is_reserved(&resolved_ip) {
+            return UrlValidationResult::Reserved;
+        }
     }
 
     UrlValidationResult::Valid
@@ -43,6 +54,23 @@ pub fn validate_target_url(url: &str) -> UrlValidationResult {
 
 pub fn is_safe_target(url: &str) -> bool {
     matches!(validate_target_url(url), UrlValidationResult::Valid)
+}
+
+fn resolve_host(host: &str) -> Option<IpAddr> {
+    use hickory_resolver::TokioAsyncResolver;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    rt.block_on(async {
+        let resolver = TokioAsyncResolver::tokio_from_system_conf().ok()?;
+        let response = resolver.lookup_ip(host).await.ok()?;
+        response.iter().next()
+    })
+}
+
+pub fn validate_ip_format(ip: &str) -> bool {
+    IpAddr::from_str(ip).is_ok()
 }
 
 fn is_localhost(host: &str) -> bool {
