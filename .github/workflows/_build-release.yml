@@ -402,20 +402,25 @@ jobs:
           ZIG_URL=$(echo "$ZIG_INDEX" | python3 -c "
           import json, sys
           data = json.load(sys.stdin)
-          # Try 0.13.0 first (known LLVM 19, stable release URL pattern), fallback to latest
-          for ver in ['0.13.0', '0.12.0', '0.11.0']:
+          # Try specific versions first, then any stable release
+          for ver in ['0.13.0', '0.12.0', '0.11.0', '0.10.0']:
               if ver in data:
-                  for arch in data[ver].get('x86_64-linux', []):
-                      if 'tarball' in arch:
-                          print(arch['tarball'])
-                          sys.exit(0)
-          # Fallback: use first available stable version with x86_64-linux
+                  arch = data[ver].get('x86_64-linux', {})
+                  if isinstance(arch, dict) and 'tarball' in arch:
+                      print(arch['tarball'])
+                      sys.exit(0)
+          # Fallback: find any stable (non-dev) version
           for ver in sorted(data.keys(), reverse=True):
-              if ver.startswith('0.') and not 'dev' in ver:
-                  for arch in data[ver].get('x86_64-linux', []):
-                      if 'tarball' in arch:
-                          print(arch['tarball'])
-                          sys.exit(0)
+              if ver.startswith('0.') and 'dev' not in ver:
+                  arch = data[ver].get('x86_64-linux', {})
+                  if isinstance(arch, dict) and 'tarball' in arch:
+                      print(arch['tarball'])
+                      sys.exit(0)
+          # Last resort: use master x86_64-linux build
+          arch = data.get('master', {}).get('x86_64-linux', {})
+          if isinstance(arch, dict) and 'tarball' in arch:
+              print(arch['tarball'])
+              sys.exit(0)
           sys.exit(1)
           ")
           echo ">>> Using Zig URL: ${ZIG_URL}"
