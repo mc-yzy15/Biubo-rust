@@ -461,7 +461,6 @@ jobs:
           printf '    -pedantic|-W*|-w) ;;\n' >> "$CC_SCRIPT"
           printf '    -fstack-protector*|-fno-omit-frame-pointer) ;;\n' >> "$CC_SCRIPT"
           printf '    -ffunction-sections|-fdata-sections) ;;\n' >> "$CC_SCRIPT"
-          printf '    -fPIC|-fPIE|-fno-pic|-fno-pie|-fno-plt) ;;\n' >> "$CC_SCRIPT"
           printf '    -fwrapv|-fvisibility=*) ;;\n' >> "$CC_SCRIPT"
           printf '    -fno-exceptions|-fno-rtti) ;;\n' >> "$CC_SCRIPT"
           printf '    -fmath-errno|-frounding-math|-ftrapping-math) ;;\n' >> "$CC_SCRIPT"
