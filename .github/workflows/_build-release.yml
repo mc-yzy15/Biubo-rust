@@ -403,7 +403,7 @@ jobs:
           import json, sys
           data = json.load(sys.stdin)
           # Try specific versions first, then any stable release
-          for ver in ['0.13.0', '0.12.0', '0.11.0', '0.10.0']:
+          for ver in ['0.12.0', '0.11.0', '0.10.0']:
               if ver in data:
                   arch = data[ver].get('x86_64-linux', {})
                   if isinstance(arch, dict) and 'tarball' in arch:
