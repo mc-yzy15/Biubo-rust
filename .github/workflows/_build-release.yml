@@ -395,13 +395,48 @@ jobs:
       - name: Install Zig as cross-compiler for C dependencies
         run: |
           set -x
-          ZIG_VERSION="0.14.1"
+          echo ">>> Fetching Zig download index..."
+          ZIG_INDEX=$(curl -fsSL https://ziglang.org/download/index.json)
+          
+          echo ">>> Resolving download URL for x86_64-linux..."
+          ZIG_URL=$(echo "$ZIG_INDEX" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          # Try 0.13.0 first (known LLVM 19, stable release URL pattern), fallback to latest
+          for ver in ['0.13.0', '0.12.0', '0.11.0']:
+              if ver in data:
+                  for arch in data[ver].get('x86_64-linux', []):
+                      if 'tarball' in arch:
+                          print(arch['tarball'])
+                          sys.exit(0)
+          # Fallback: use first available stable version with x86_64-linux
+          for ver in sorted(data.keys(), reverse=True):
+              if ver.startswith('0.') and not 'dev' in ver:
+                  for arch in data[ver].get('x86_64-linux', []):
+                      if 'tarball' in arch:
+                          print(arch['tarball'])
+                          sys.exit(0)
+          sys.exit(1)
+          ")
+          echo ">>> Using Zig URL: ${ZIG_URL}"
+          ZIG_VERSION=$(echo "$ZIG_INDEX" | python3 -c "
+          import json, sys, re
+          data = json.load(sys.stdin)
+          url = '$ZIG_URL'
+          m = re.search(r'/zig-(linux-x86_64-)?([\d.]+(?:-dev\.\d+\+[a-f0-9]+)?)\.tar', url)
+          print(m.group(2) if m else 'unknown')
+          ")
+          echo ">>> Zig version: ${ZIG_VERSION}"
+          
           echo ">>> Downloading Zig ${ZIG_VERSION}..."
-          curl -fSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
-            | tar xJ -C /opt
+          mkdir -p /opt
+          curl -fSL "$ZIG_URL" | tar xJ -C /opt
           echo ">>> Download complete"
-          ZIG_DIR="/opt/zig-linux-x86_64-${ZIG_VERSION}"
+          
+          ZIG_DIR=$(find /opt -name "zig" -type f -path "*zig-*" 2>/dev/null | head -1 | xargs dirname)
+          echo ">>> Zig installed at: ${ZIG_DIR}"
           ${ZIG_DIR}/zig version
+          
           echo ">>> Creating CC wrapper..."
           CC_SCRIPT=/usr/local/bin/loongarch64-cc
           printf '#!/bin/bash\n' > "$CC_SCRIPT"
