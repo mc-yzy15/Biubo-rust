@@ -614,6 +614,17 @@ fn build_forbidden_response(state: &Arc<AppState>, code: &str, start: std::time:
     (status, Html(html)).into_response()
 }
 
+/// Starts a background garbage-collection worker for strike counters.
+///
+/// # Design rationale: why `std::thread::spawn` instead of `tokio::task::spawn`
+///
+/// - The worker performs only synchronous DashMap operations (`retain` with a
+///   deadline comparison) -- no async calls are involved.
+/// - Running on a dedicated OS thread keeps the 1-hour-long sleep cycle off the
+///   tokio runtime, avoiding unnecessary task bookkeeping for maintenance work
+///   that runs once per hour.
+/// - This is consistent with the pattern used by all other GC workers in the
+///   codebase (rate_limit, challenge token, WAF cache).
 pub fn start_strike_gc_worker() {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));

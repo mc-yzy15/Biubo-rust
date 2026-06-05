@@ -862,6 +862,18 @@ fn extract_json(text: &str) -> Option<Value> {
     None
 }
 
+/// Starts a background garbage-collection worker for the detection result cache.
+///
+/// # Design rationale: why `std::thread::spawn` instead of `tokio::task::spawn`
+///
+/// - The worker calls `DETECTION_CACHE.retain(...)`, which is a purely synchronous
+///   DashMap operation (no `.await` points), so there is no benefit to running it
+///   inside the async runtime.
+/// - Using a dedicated OS thread prevents this long-lived sleeping loop from
+///   consuming tokio task resources, ensuring the runtime stays responsive for
+///   actual request processing.
+/// - `std::thread::sleep` in a tokio task would block the worker thread entirely;
+///   by using a separate OS thread we avoid that problem altogether.
 pub fn start_cache_gc_worker(cache_ttl: u64, gc_interval: u64) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(gc_interval));

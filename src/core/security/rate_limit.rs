@@ -117,6 +117,17 @@ pub async fn check_rate_limit(ip: &str, host: &str, settings: &Settings) -> Rate
     }
 }
 
+/// Starts a background garbage-collection worker for expired rate-limit entries.
+///
+/// # Design rationale: why `std::thread::spawn` instead of `tokio::task::spawn`
+///
+/// - This worker performs purely synchronous operations (DashMap iteration and
+///   parking_lot::Mutex locking) with no `.await` points -- there is nothing
+///   for the async runtime to schedule.
+/// - Running it as a dedicated OS thread keeps long-lived, blocking GC work off
+///   the tokio worker pool, preventing interference with async request handling.
+/// - The sleeping loop (`std::thread::sleep`) would block a tokio task if spawned
+///   inside the runtime, which is precisely what we want to avoid.
 pub fn start_rate_gc_worker(gc_interval: u64) {
     std::thread::spawn(move || {
         loop {

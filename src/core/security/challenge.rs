@@ -144,6 +144,16 @@ fn cleanup_used_tokens() {
     }
 }
 
+/// Starts a background garbage-collection worker for expired challenge tokens.
+///
+/// # Design rationale: why `std::thread::spawn` instead of `tokio::task::spawn`
+///
+/// - `cleanup_used_tokens()` does only synchronous DashMap iteration (collecting
+///   expired keys, then removing them one by one) -- there is no async work.
+/// - A dedicated OS thread avoids occupying a tokio worker thread with a
+///   long-lived sleeping loop that blocks for 30 seconds between cycles.
+/// - This keeps the tokio runtime free to handle inbound requests without
+///   competition from background maintenance work.
 pub fn start_token_gc_worker() {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(30));
