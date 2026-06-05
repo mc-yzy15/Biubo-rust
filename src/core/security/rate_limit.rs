@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 
 use crate::config::settings::Settings;
 use crate::data::storage::manager::get_db;
+use crate::error::WafError;
 
 struct RateEntry {
     timestamps: VecDeque<Instant>,
@@ -39,7 +40,10 @@ pub async fn check_rate_limit(ip: &str, host: &str, settings: &Settings) -> Rate
 
     let now = Instant::now();
 
-    let count = {
+    // Check ban threshold and get current count atomically.
+    // IMPORTANT: parking_lot::MutexGuard is !Send, so we must NOT hold it across .await.
+    // We structure the inner block so guard is dropped before any async call.
+    let should_ban = {
         let entry = RATE_DATA
             .entry(ip.to_string())
             .or_insert_with(|| {
@@ -49,42 +53,48 @@ pub async fn check_rate_limit(ip: &str, host: &str, settings: &Settings) -> Rate
             })
             .clone();
 
-        let current_count = {
-            let mut guard = entry.lock();
+        let mut guard = entry.lock();
 
-            while let Some(&front) = guard.timestamps.front() {
-                if now.duration_since(front).as_secs_f64() > 1.0 {
-                    guard.timestamps.pop_front();
-                } else {
-                    break;
-                }
-            }
-
-            let count = guard.timestamps.len();
-            if count >= settings.rate_ban_threshold as usize {
-                guard.timestamps.clear();
+        // Remove expired timestamps (older than 1 second window)
+        while let Some(&front) = guard.timestamps.front() {
+            if now.duration_since(front).as_secs_f64() > 1.0 {
+                guard.timestamps.pop_front();
             } else {
-                guard.timestamps.push_back(now);
+                break;
             }
-            count
-        };
-
-        if current_count >= settings.rate_ban_threshold as usize {
-            db.ban_ip(
-                ip,
-                "Rate limit exceeded (Ban)",
-                Some(settings.rate_ban_duration_min as u32),
-            )
-            .await;
-
-            return RateLimitResult {
-                blocked: true,
-                reason: Some(BlockReason::Banned),
-            };
         }
 
-        current_count + 1
+        let raw_count = guard.timestamps.len();
+        if raw_count >= settings.rate_ban_threshold as usize {
+            // Trigger ban: clear the counter; guard drops here.
+            guard.timestamps.clear();
+            drop(guard);
+            // Signal caller to ban the IP (async call happens outside the !Send scope)
+            (true, 0)
+        } else {
+            // Atomically record this request
+            guard.timestamps.push_back(now);
+            let count = guard.timestamps.len();
+            drop(guard);
+            (false, count)
+        }
     };
+
+    let (banned, count) = should_ban;
+
+    if banned {
+        db.ban_ip(
+            ip,
+            "Rate limit exceeded (Ban)",
+            Some(settings.rate_ban_duration_min as u32),
+        )
+        .await;
+
+        return RateLimitResult {
+            blocked: true,
+            reason: Some(BlockReason::Banned),
+        };
+    }
 
     if count > settings.rate_limit_per_sec as usize {
         tracing::info!("[RATE] {} rate limited ({} req/s)", ip, count);

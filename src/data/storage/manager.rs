@@ -92,6 +92,57 @@ impl ProxyDB {
         Ok(db)
     }
 
+    /// Create a new ProxyDB at a custom path (used as fallback when normal path fails)
+    pub fn new_with_path(host: &str, host_dir: &PathBuf, settings: &Settings) -> std::io::Result<Self> {
+        std::fs::create_dir_all(host_dir.join("logs"))?;
+
+        let ram_path = host_dir.join("RAM.msgpack");
+        let ram = Database::new(&ram_path, false, 5, std::time::Duration::from_secs(5))?;
+
+        let mut db = ProxyDB {
+            host: host.to_string(),
+            host_dir: host_dir.clone(),
+            ram: Arc::new(ram),
+            log_db: Mutex::new(None),
+            log_path: Mutex::new(String::new()),
+            template_root: settings.template_root.clone(),
+            lock: Mutex::new(()),
+        };
+
+        if db.ram.is_empty() {
+            db.init_ram_if_empty(settings)?;
+        }
+
+        db.ensure_log_db()?;
+
+        Ok(db)
+    }
+
+    /// Create an ephemeral in-memory-only ProxyDB (ultimate fallback, no persistent I/O)
+    pub fn new_ephemeral(host: &str) -> Self {
+        let host_dir = std::env::temp_dir().join("biubo-waf-ephemeral").join(host);
+        let _ = std::fs::create_dir_all(&host_dir);
+
+        let ram_path = host_dir.join("RAM.msgpack");
+        let ram = Database::new(&ram_path, false, 5, std::time::Duration::from_secs(5))
+            .unwrap_or_else(|_| {
+                let fallback_path = std::env::temp_dir()
+                    .join(format!("biubo-waf-ram-{}.msgpack", host));
+                Database::new(&fallback_path, false, 5, std::time::Duration::from_secs(5))
+                    .expect("Impossible: temp fallback DB creation failed")
+            });
+
+        ProxyDB {
+            host: host.to_string(),
+            host_dir,
+            ram: Arc::new(ram),
+            log_db: Mutex::new(None),
+            log_path: Mutex::new(String::new()),
+            template_root: std::path::PathBuf::new(),
+            lock: Mutex::new(()),
+        }
+    }
+
     fn init_ram_if_empty(&mut self, settings: &Settings) -> std::io::Result<()> {
         let template_path = settings.template_root.join("RAM.json");
         if template_path.exists() {
@@ -508,7 +559,31 @@ pub fn get_db(host: &str) -> Arc<ProxyDB> {
                 Ok(db) => Arc::new(db),
                 Err(e) => {
                     tracing::error!("Failed to create ProxyDB for host '{}': {}", host, e);
-                    panic!("Failed to create ProxyDB for host '{}': {}", host, e)
+                    tracing::warn!(
+                        "Creating fallback ProxyDB for '{}' to avoid crash",
+                        host
+                    );
+                    // Try fallback in temp directory
+                    let fallback_dir = std::env::temp_dir()
+                        .join("biubo-waf-fallback")
+                        .join(host);
+                    match ProxyDB::new_with_path(host, &fallback_dir, &settings) {
+                        Ok(db) => {
+                            tracing::warn!(
+                                "Using fallback ProxyDB for '{}' at {:?}",
+                                host,
+                                fallback_dir
+                            );
+                            Arc::new(db)
+                        }
+                        Err(fallback_err) => {
+                            tracing::error!(
+                                "Fallback ProxyDB also failed: {} - using in-memory stub",
+                                fallback_err
+                            );
+                            Arc::new(ProxyDB::new_ephemeral(host))
+                        }
+                    }
                 }
             }
         })

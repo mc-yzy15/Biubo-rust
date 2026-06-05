@@ -2,6 +2,7 @@ use crate::api::app::AppState;
 use crate::config::settings::Settings;
 use crate::core::engine::async_detection_queue::DetectionTask;
 use crate::core::engine::waf_engine::quick_detect_request;
+use crate::core::metrics::METRICS;
 use crate::core::security::challenge::{
     get_challenge_token, verify_challenge_token, ChallengeStatus,
 };
@@ -38,6 +39,9 @@ async fn reverse_proxy(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
 ) -> Response {
+    let _request_start = std::time::Instant::now();
+    METRICS.requests_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
     let (
         host,
         target_base,
@@ -69,6 +73,7 @@ async fn reverse_proxy(
         let target_base = match settings.proxy_map.get(&host) {
             Some(t) => t.clone(),
             None => {
+                METRICS.record_latency(_request_start.elapsed());
                 return Html(state.error_pages.get("404").cloned().unwrap_or_default())
                     .into_response();
             }
@@ -107,6 +112,7 @@ async fn reverse_proxy(
             if !p.starts_with("/init")
                 && !is_static_resource(&req.uri().to_string(), &settings.static_extensions)
             {
+                METRICS.record_latency(_request_start.elapsed());
                 return Redirect::temporary("/init/").into_response();
             }
         }
@@ -179,6 +185,7 @@ async fn reverse_proxy(
     };
 
     if proxy_status == "off" {
+        METRICS.record_latency(_request_start.elapsed());
         return Html(state.error_pages.get("404").cloned().unwrap_or_default()).into_response();
     }
 
@@ -203,7 +210,7 @@ async fn reverse_proxy(
                 ChallengeStatus::Invalid | ChallengeStatus::Replayed => {
                     let db = get_db(&host);
                     let _ = db.ban_ip(&client_ip, "forged_challenge_token", None).await;
-                    return build_forbidden_response(&state, "403");
+                    return build_forbidden_response(&state, "403", _request_start);
                 }
                 ChallengeStatus::Expired | ChallengeStatus::Missing => {
                     let db = get_db(&host);
@@ -214,10 +221,12 @@ async fn reverse_proxy(
                                 .and_then(|c| extract_cookie_value(c, "bw_captcha"));
 
                             if captcha_cookie.is_none() {
+                                METRICS.requests_challenged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                METRICS.record_latency(_request_start.elapsed());
                                 return build_captcha_response(&state, &challenge_secret);
                             }
                         }
-                        return build_forbidden_response(&state, "403");
+                        return build_forbidden_response(&state, "403", _request_start);
                     }
 
                     let mut strikes = STRIKE_COUNTER.entry(client_ip.clone()).or_insert_with(|| (0, std::time::Instant::now()));
@@ -231,10 +240,14 @@ async fn reverse_proxy(
                             None => "unknown",
                         };
                         let _ = db.ban_ip_temporary(&client_ip, reason).await;
+                        METRICS.requests_challenged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        METRICS.record_latency(_request_start.elapsed());
                         return build_captcha_response(&state, &challenge_secret);
                     }
                     strikes.value_mut().0 += 1;
                     strikes.value_mut().1 = std::time::Instant::now();
+                    METRICS.requests_challenged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    METRICS.record_latency(_request_start.elapsed());
                     return build_challenge_response(
                         &state,
                         &client_ip,
@@ -252,7 +265,7 @@ async fn reverse_proxy(
         if normalized_score > 70.0 {
             let db = get_db(&host);
             let _ = db.ban_ip(&client_ip, "bad_ip_reputation", None).await;
-            return build_forbidden_response(&state, "403");
+            return build_forbidden_response(&state, "403", _request_start);
         }
 
         let mut headers_with_reputation = headers.clone();
@@ -270,7 +283,7 @@ async fn reverse_proxy(
         if !file_safe {
             let db = get_db(&host);
             let _ = db.ban_ip(&client_ip, &file_msg, None).await;
-            return build_forbidden_response(&state, "403");
+            return build_forbidden_response(&state, "403", _request_start);
         }
 
         let mut args_map = HashMap::new();
@@ -328,7 +341,8 @@ async fn reverse_proxy(
             create_session(&request_id, &host, log_entry);
 
             if proxy_status == "on" {
-                return build_forbidden_response(&state, "403");
+                METRICS.requests_blocked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return build_forbidden_response(&state, "403", _request_start);
             }
         }
     }
@@ -352,6 +366,7 @@ async fn reverse_proxy(
         Ok(result) => result,
         Err(e) => {
             tracing::error!("Forward error: {}", e);
+            METRICS.record_latency(_request_start.elapsed());
             return (
                 StatusCode::BAD_GATEWAY,
                 Html(state.error_pages.get("500").cloned().unwrap_or_default()),
@@ -399,6 +414,9 @@ async fn reverse_proxy(
         }
         response = response.header(key.as_str(), value.as_str());
     }
+
+    METRICS.requests_passed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    METRICS.record_latency(_request_start.elapsed());
 
     match response.body(Body::from(final_content)) {
         Ok(resp) => resp,
@@ -577,7 +595,10 @@ fn build_captcha_response(state: &Arc<AppState>, _challenge_secret: &str) -> Res
     (StatusCode::FORBIDDEN, Html(html)).into_response()
 }
 
-fn build_forbidden_response(state: &Arc<AppState>, code: &str) -> Response {
+fn build_forbidden_response(state: &Arc<AppState>, code: &str, start: std::time::Instant) -> Response {
+    METRICS.requests_blocked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    METRICS.record_latency(start.elapsed());
+
     let html = state
         .error_pages
         .get(code)

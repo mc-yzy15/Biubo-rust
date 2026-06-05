@@ -617,7 +617,26 @@ pub async fn detect_request(
 
         let full_prompt = format!("{}\n\n{}", LLM_SYSTEM_INSTRUCTION, prompt);
 
-        let raw_result = llm_call(&full_prompt, false, None, settings).await;
+        let llm_timeout = std::time::Duration::from_secs(settings.llm_timeout_secs);
+        let llm_on_error = || -> DetectionResult {
+            if settings.llm_fail_open {
+                DetectionResult::normal()
+            } else {
+                DetectionResult::hacker(vec!["llm_detection_failed".to_string()])
+            }
+        };
+
+        let raw_result = match tokio::time::timeout(llm_timeout, llm_call(&full_prompt, false, None, settings)).await {
+            Ok(s) => s,
+            Err(_) => {
+                tracing::error!(
+                    "LLM detection timed out for {} after {}s",
+                    url,
+                    settings.llm_timeout_secs
+                );
+                return llm_on_error();
+            }
+        };
 
         let result = match extract_json(&raw_result) {
             Some(v) => v,
@@ -626,7 +645,7 @@ pub async fn detect_request(
                     "LLM detection failed for {} (Invalid LLM response format)",
                     url
                 );
-                return DetectionResult::normal();
+                return llm_on_error();
             }
         };
 
@@ -637,7 +656,7 @@ pub async fn detect_request(
                     "LLM detection failed for {} (Invalid LLM response format)",
                     url
                 );
-                return DetectionResult::normal();
+                return llm_on_error();
             }
         };
 

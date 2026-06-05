@@ -104,6 +104,9 @@ pub struct Settings {
 
     pub auto_patch_enabled: bool,
 
+    pub llm_timeout_secs: u64,
+    pub llm_fail_open: bool,
+
     pub internal_api_key: String,
     pub cluster_shared_secret: String,
     pub init_token: String,
@@ -233,6 +236,9 @@ impl Default for Settings {
             waf_api_keys: Vec::new(),
 
             auto_patch_enabled: false,
+
+            llm_timeout_secs: 30,
+            llm_fail_open: false,
 
             internal_api_key: generate_random_secret(),
             cluster_shared_secret: generate_random_secret(),
@@ -374,6 +380,10 @@ impl Settings {
             if self.ssl_acme_email.is_empty() {
                 return Err("SSL_ACME_EMAIL cannot be empty when SSL is enabled".to_string());
             }
+        }
+
+        if self.llm_timeout_secs == 0 {
+            return Err("LLM_TIMEOUT_SECS must be positive".to_string());
         }
 
         Ok(())
