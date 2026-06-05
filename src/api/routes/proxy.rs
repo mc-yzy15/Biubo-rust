@@ -1,12 +1,11 @@
 use crate::api::app::AppState;
-use crate::config::settings::Settings;
 use crate::core::engine::async_detection_queue::DetectionTask;
 use crate::core::engine::waf_engine::quick_detect_request;
 use crate::core::metrics::METRICS;
 use crate::core::security::challenge::{
     get_challenge_token, verify_challenge_token, ChallengeStatus,
 };
-use crate::core::security::rate_limit::{check_rate_limit, BlockReason};
+use crate::core::security::rate_limit::{check_cc_attack, check_rate_limit, BlockReason};
 use crate::core::session::manager::{build_log_entry, create_session};
 use crate::data::storage::manager::get_db;
 use crate::services::proxy::forwarder::forward_request;
@@ -190,10 +189,11 @@ async fn reverse_proxy(
     }
 
     if proxy_status != "pass" && !is_whitelisted {
-        let rate_result = {
-            let s: Arc<Settings> = state.settings.read().clone();
-            check_rate_limit(&client_ip, &host, &s).await
-        };
+        let settings_arc = {
+            let guard = state.settings.read();
+            Arc::clone(&*guard)
+        }; // 锁在此处释放
+        let rate_result = check_rate_limit(&client_ip, &host, &settings_arc).await;
 
         if rate_result.blocked {
             let challenge_cookie = raw_cookie_header
@@ -237,6 +237,8 @@ async fn reverse_proxy(
                             Some(BlockReason::Banned) => "banned",
                             Some(BlockReason::TemporaryBanned) => "temporary_banned",
                             Some(BlockReason::RateLimit) => "rate_limit",
+                            Some(BlockReason::GrayZoneBan) => "gray_zone_ban",
+                            Some(BlockReason::CcAttack) => "cc_attack",
                             None => "unknown",
                         };
                         let _ = db.ban_ip_temporary(&client_ip, reason).await;
@@ -273,6 +275,18 @@ async fn reverse_proxy(
             "x-ip-reputation-score".to_string(),
             normalized_score.to_string(),
         );
+
+        // CC attack detection (independent from rate limiting)
+        let cc_result = check_cc_attack(&client_ip, &path, &user_agent);
+        if cc_result.blocked {
+            let db = get_db(&host);
+            let _ = db.ban_ip(&client_ip, "cc_attack", Some(10)).await;
+            tracing::warn!(
+                "[CC] {} blocked for CC attack pattern",
+                client_ip
+            );
+            return build_forbidden_response(&state, "403", _request_start);
+        }
 
         let (file_safe, file_msg) = check_file_security(
             &decoded_body,
@@ -313,10 +327,10 @@ async fn reverse_proxy(
                 host: host.clone(),
                 url: path.clone(),
                 method: method.as_str().to_string(),
-                headers: headers.clone(),
-                cookies: cookies.clone(),
-                body: decoded_body.clone(),
-                args: args_map.clone(),
+                headers: Arc::new(headers.clone()),
+                cookies: Arc::new(cookies.clone()),
+                body: Arc::new(decoded_body.clone()),
+                args: Arc::new(args_map.clone()),
             };
 
             let queue = state.async_detection_queue.as_ref().unwrap();
@@ -347,20 +361,21 @@ async fn reverse_proxy(
         }
     }
 
-    let forward_result = {
-        let s: Arc<Settings> = state.settings.read().clone();
-        forward_request(
-            &target_base,
-            &path,
-            method.as_str(),
-            &headers,
-            &decoded_body,
-            &cookies,
-            query_string.as_deref(),
-            &s,
-        )
-        .await
-    };
+    let settings_arc = {
+        let guard = state.settings.read();
+        Arc::clone(&*guard)
+    }; // 锁在此处释放
+    let forward_result = forward_request(
+        &target_base,
+        &path,
+        method.as_str(),
+        &headers,
+        &decoded_body,
+        &cookies,
+        query_string.as_deref(),
+        &settings_arc,
+    )
+    .await;
 
     let forward_result = match forward_result {
         Ok(result) => result,

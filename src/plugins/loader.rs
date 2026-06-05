@@ -1,5 +1,3 @@
-#![allow(unused_imports)]
-
 use crate::plugins::types::{PluginConfig, PluginInstance, PluginMetadata, PluginType};
 use serde::{Deserialize, Serialize};
 use std::fs;

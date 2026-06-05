@@ -5,7 +5,6 @@ use std::fmt;
 use crate::core::models::ReputationProviderResult;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum ProviderError {
     HttpError(reqwest::Error),
     DnsError(String),

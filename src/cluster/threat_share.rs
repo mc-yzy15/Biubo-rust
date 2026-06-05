@@ -1,5 +1,4 @@
 #![cfg(feature = "cluster-mode")]
-#![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;

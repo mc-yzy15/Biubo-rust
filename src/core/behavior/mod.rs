@@ -1,5 +1,4 @@
 #![cfg(feature = "behavior-profiling")]
-#![allow(dead_code)]
 
 #[cfg(feature = "behavior-profiling")]
 use chrono::{DateTime, Duration, Utc};

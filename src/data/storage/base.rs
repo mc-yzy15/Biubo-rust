@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -73,7 +71,7 @@ impl Database {
 
         let (data, dirty, stop_flag) = init_state(&path)?;
 
-        let mut db = Database {
+        let db = Database {
             path: path.clone(),
             auto_backup,
             max_backup_count,
@@ -116,7 +114,6 @@ impl Database {
         removed
     }
 
-    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.data.lock().len()
     }

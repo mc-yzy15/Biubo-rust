@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,6 +13,16 @@ static JSON_BLOCK_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
 
 static JSON_OBJECT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"\{.*?\}").unwrap()
+});
+
+static LLM_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(5))
+        .pool_max_idle_per_host(64)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .build()
+        .expect("Failed to build LLM HTTP client")
 });
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,11 +95,8 @@ pub struct ZeroDayContext {
     pub request_headers: HashMap<String, String>,
     pub request_body: String,
     pub behavior_score: f64,
-    pub behavior_factors: Vec<String>,
     pub reputation_score: f64,
     pub provider_details: String,
-    pub recent_history: String,
-    pub rule_check_results: String,
 }
 
 impl ZeroDayContext {
@@ -103,11 +109,8 @@ impl ZeroDayContext {
         request_headers: HashMap<String, String>,
         request_body: String,
         behavior_score: f64,
-        behavior_factors: Vec<String>,
         reputation_score: f64,
         provider_details: String,
-        recent_history: String,
-        rule_check_results: String,
     ) -> Self {
         ZeroDayContext {
             tier1_verdict,
@@ -117,11 +120,8 @@ impl ZeroDayContext {
             request_headers,
             request_body,
             behavior_score,
-            behavior_factors,
             reputation_score,
             provider_details,
-            recent_history,
-            rule_check_results,
         }
     }
 }
@@ -209,11 +209,9 @@ impl Tier1QuickEval {
             "stream": false,
         });
 
-        let client = reqwest::Client::new();
-
         let result = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
-            client
+            LLM_HTTP_CLIENT
                 .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
@@ -304,17 +302,32 @@ impl Tier2DeepAnalysis {
     }
 
     fn build_tier2_prompt(&self, context: &ZeroDayContext) -> String {
-        let headers_str = serde_json::to_string(&context.request_headers).unwrap_or_default();
-        let behavior_factors_str = context.behavior_factors.join(", ");
+        // LLM 输入截断：只保留核心 headers（user-agent / referer / content-type / x-forwarded-for）
+        let truncated_headers: HashMap<String, String> = {
+            const CORE_KEYS: &[&str] = &["user-agent", "referer", "content-type", "x-forwarded-for"];
+            let mut result = HashMap::with_capacity(CORE_KEYS.len());
+            for key in CORE_KEYS {
+                if let Some(v) = context.request_headers.get(*key).or_else(|| context.request_headers.get(&key.to_lowercase())) {
+                    result.insert(key.to_string(), v.clone());
+                }
+            }
+            result
+        };
+        let headers_str = serde_json::to_string(&truncated_headers).unwrap_or_default();
+
+        // LLM 输入截断：body 超过 2KB 截断
+        let truncated_body = if context.request_body.len() > 2048 {
+            format!("{}...<Truncated>", &context.request_body[..2048])
+        } else {
+            context.request_body.clone()
+        };
 
         format!(
             "You are an expert HTTP security analysis engine. Your job: distinguish real attacks from normal user behavior, including zero-day and novel attack patterns.\n\n\
             ## Context\n\
             - Tier 1 quick evaluation verdict: {tier1_verdict} (confidence: {tier1_confidence})\n\
-            - WAF rule check: No known patterns matched\n\
-            - Behavior score: {behavior_score}/100 (factors: {behavior_factors})\n\
-            - IP reputation: {reputation_score}/100 (providers: {provider_details})\n\
-            - Request history: {recent_history}\n\n\
+            - Behavior score: {behavior_score}/100\n\
+            - IP reputation: {reputation_score}/100 (providers: {provider_details})\n\n\
             ## Current Request\n\
             - URL: {url}\n\
             - Method: {method}\n\
@@ -328,14 +341,12 @@ impl Tier2DeepAnalysis {
             tier1_verdict = context.tier1_verdict.verdict,
             tier1_confidence = context.tier1_confidence,
             behavior_score = context.behavior_score,
-            behavior_factors = behavior_factors_str,
             reputation_score = context.reputation_score,
             provider_details = context.provider_details,
-            recent_history = context.recent_history,
             url = context.request_url,
             method = context.request_method,
             headers = headers_str,
-            body = context.request_body,
+            body = truncated_body,
         )
     }
 
@@ -357,11 +368,9 @@ impl Tier2DeepAnalysis {
             "stream": false,
         });
 
-        let client = reqwest::Client::new();
-
         let result = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
-            client
+            LLM_HTTP_CLIENT
                 .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
@@ -479,6 +488,25 @@ impl TwoTierLlmPipeline {
                     return LlmResult::Safe;
                 }
 
+                // Task 2.5: 收紧 LLM 升级门槛
+                // confidence < 0.85 → 低置信度可疑视为正常，不升级 Tier 2
+                if verdict.confidence < 0.85 {
+                    return LlmResult::Safe;
+                }
+
+                // confidence >= 0.95 → 高置信度可疑，直接判定，无需 Tier 2
+                if verdict.confidence >= 0.95 {
+                    return LlmResult::Suspicious(Tier2Result {
+                        result_type: "hacker".to_string(),
+                        attack_types: vec!["tier1_high_confidence".to_string()],
+                        analysis: format!(
+                            "Tier 1 high confidence suspicious ({:.2}), skipped Tier 2",
+                            verdict.confidence
+                        ),
+                    });
+                }
+
+                // 0.85 ≤ confidence < 0.95: 升级到 Tier 2 深度分析
                 if let Some(context) = full_context {
                     let tier2_result = self.deep_analysis.analyze(&context).await;
 
@@ -743,17 +771,13 @@ mod tests {
             headers,
             "{\"test\": true}".to_string(),
             65.0,
-            vec!["high_velocity".to_string()],
             70.0,
             "provider_x".to_string(),
-            "recent_history".to_string(),
-            "no_rules_matched".to_string(),
         );
 
         assert_eq!(context.tier1_verdict.verdict, "suspicious");
         assert!((context.tier1_confidence - 0.8).abs() < 0.01);
         assert_eq!(context.request_method, "POST");
         assert_eq!(context.behavior_score, 65.0);
-        assert_eq!(context.behavior_factors.len(), 1);
     }
 }

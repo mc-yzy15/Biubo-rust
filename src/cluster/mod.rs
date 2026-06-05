@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![doc = "Cluster management module for distributed WAF deployment"]
 
 use chrono::{DateTime, Utc};

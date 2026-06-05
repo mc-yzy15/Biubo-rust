@@ -203,7 +203,6 @@ pub async fn get_ip_reputation(ip: &str) -> bool {
     }
 }
 
-#[allow(dead_code)]
 pub async fn verify_captcha(ticket: &str) -> bool {
     match HTTP_CLIENT
         .post("https://captcha.zplb.org.cn/api/verify")
@@ -229,7 +228,6 @@ pub async fn verify_captcha(ticket: &str) -> bool {
     }
 }
 
-#[allow(dead_code)]
 pub fn get_source_from_referer(referer: &str) -> String {
     if referer.is_empty() {
         return "direct".to_string();

@@ -92,7 +92,6 @@ impl SslManager {
     }
 
     #[cfg(feature = "ssl-support")]
-    #[cfg_attr(not(test), allow(dead_code))]
     async fn save_certificate_states(
         &self,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

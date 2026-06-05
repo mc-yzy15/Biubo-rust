@@ -66,7 +66,6 @@ impl WafEvent {
         matches!(self, WafEvent::Cluster { .. })
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_detection(
         ip: String,
         attack_type: String,
@@ -82,7 +81,6 @@ impl WafEvent {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_block(ip: String, reason: String) -> Self {
         WafEvent::Block {
             ip,
@@ -91,7 +89,6 @@ impl WafEvent {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_unblock(ip: String) -> Self {
         WafEvent::Unblock {
             ip,
@@ -99,7 +96,6 @@ impl WafEvent {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_threat_score(ip: String, score: f64) -> Self {
         WafEvent::ThreatScoreUpdate {
             ip,
@@ -108,7 +104,6 @@ impl WafEvent {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_cluster(node_id: String, event_type: String) -> Self {
         WafEvent::Cluster {
             node_id,
@@ -117,7 +112,6 @@ impl WafEvent {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_config_change(config_type: String) -> Self {
         WafEvent::ConfigChange {
             config_type,
@@ -135,7 +129,6 @@ pub struct EventBroadcaster {
 
 #[derive(Clone)]
 pub struct WsClient {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub permissions: Vec<String>,
 }
 
@@ -182,7 +175,6 @@ impl EventBroadcaster {
         tracing::info!("WebSocket client disconnected: id={}", client_id);
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }

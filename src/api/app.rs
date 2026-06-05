@@ -32,7 +32,6 @@ pub struct AppState {
     pub reputation_manager: ReputationManager,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn create_app(settings: SharedSettings) -> Router {
     build_app_internal(settings, None)
 }

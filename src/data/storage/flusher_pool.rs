@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;

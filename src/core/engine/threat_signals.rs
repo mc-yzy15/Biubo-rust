@@ -191,6 +191,11 @@ pub fn compute_threat_signals(
     }
 }
 
+/// 仅计算 behavior_score（0-100 标度），供前置拦截使用
+pub fn compute_behavior_score_only(headers: &HashMap<String, String>, body: &str) -> f64 {
+    compute_behavior_score(headers, body) * 100.0
+}
+
 fn compute_behavior_score(headers: &HashMap<String, String>, body: &str) -> f64 {
     let mut score: f64 = 0.0;
 

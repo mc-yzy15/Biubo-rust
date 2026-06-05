@@ -14,8 +14,6 @@ pub mod redis_driver;
 #[cfg(feature = "postgres-support")]
 pub mod postgres_driver;
 
-#[allow(unused_imports)]
-pub use base::Database;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StorageDriverType {
@@ -27,7 +25,6 @@ pub enum StorageDriverType {
 }
 
 #[cfg(any(feature = "redis-support", feature = "postgres-support"))]
-#[allow(unused_imports)]
 pub use driver::{
-    create_driver_async, StorageConfig, StorageDriver, StorageDriverError,
+    StorageDriver, StorageDriverError,
 };

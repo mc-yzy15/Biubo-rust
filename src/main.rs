@@ -1,11 +1,9 @@
-#![allow(unused_imports)]
-
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use crate::api::app::create_app_with_async_detection;
 use crate::config::settings::{Settings, SharedSettings};
-use crate::core::engine::async_detection_queue::start_async_detection_workers;
+use crate::core::engine::async_detection_queue::{default_worker_count, start_async_detection_workers};
 use axum::routing::get;
 use axum::Router;
 use std::sync::Arc;
@@ -65,13 +63,10 @@ async fn main() {
 
     let session_timeout = settings.read().session_timeout as u64;
     let session_gc_interval = settings.read().session_gc_interval as u64;
-    let cache_ttl = settings.read().cache_ttl as u64;
-    let cache_gc_interval = settings.read().cache_gc_interval as u64;
     let rate_gc_interval = settings.read().rate_gc_interval as u64;
 
     core::session::manager::start_session_gc_worker(session_timeout, session_gc_interval);
     core::session::manager::start_log_gc_worker(settings.clone());
-    core::engine::waf_engine::start_cache_gc_worker(cache_ttl, cache_gc_interval);
     core::security::rate_limit::start_rate_gc_worker(rate_gc_interval);
     core::security::challenge::start_token_gc_worker();
     crate::api::routes::proxy::start_strike_gc_worker();
@@ -86,13 +81,14 @@ async fn main() {
         );
     }
 
-    let async_detection_queue = start_async_detection_workers(4, 1000, settings.clone());
+    let worker_count = default_worker_count();
+    let async_detection_queue = start_async_detection_workers(worker_count, 1000, settings.clone());
 
     tracing::info!("Background GC workers started");
 
     let app = create_app_with_async_detection(settings.clone(), async_detection_queue);
 
-    let shutdown_signal = {
+    let _shutdown_signal = {
         use tokio::signal;
 
         #[cfg(unix)]

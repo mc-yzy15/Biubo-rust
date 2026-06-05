@@ -1,5 +1,4 @@
 #![cfg(feature = "cluster-mode")]
-#![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -15,7 +14,6 @@ const MAX_RETRY_COUNT: u8 = 3;
 const CLUSTER_SYNC_CHANNEL: &str = "biubo:cluster:config_sync";
 const HTTP_SYNC_TIMEOUT_SECS: u64 = 10;
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConfigUpdateType {
     #[serde(rename = "rules")]
@@ -50,7 +48,6 @@ pub struct ConfigUpdate {
 }
 
 impl ConfigUpdate {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new(update_type: ConfigUpdateType, payload: String, source_node_id: String) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -94,10 +91,8 @@ pub struct ConfigSync {
     pub manager: Arc<ClusterManager>,
     pub settings: SharedSettings,
     #[cfg(feature = "redis-support")]
-    #[cfg_attr(not(test), allow(dead_code))]
     pub redis_client: Option<redis::aio::ConnectionManager>,
     pub pending_acks: DashMap<String, ConfigUpdateAck>,
-    #[cfg_attr(not(test), allow(dead_code))]
     pub http_client: reqwest::Client,
 }
 

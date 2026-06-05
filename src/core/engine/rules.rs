@@ -1,10 +1,8 @@
-#![allow(dead_code)]
-
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 #[cfg(feature = "plugin-system")]
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 pub static RAW_RULES: &[(&str, &[&str])] = &[
     (
@@ -239,7 +237,6 @@ pub static COMPILED_RULES: Lazy<HashMap<&'static str, Regex>> = Lazy::new(|| {
 });
 
 #[cfg(feature = "plugin-system")]
-#[allow(dead_code)]
 static PLUGIN_RULE_CACHE: Lazy<Mutex<HashMap<String, (String, Regex)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -257,7 +254,6 @@ pub fn check_rules(text: &str, compiled_rules: &HashMap<&str, Regex>, early_exit
 }
 
 #[cfg(feature = "plugin-system")]
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn evaluate_plugin_rules(
     text: &str,
     plugin_rules: &HashMap<&str, Vec<&str>>,
@@ -272,7 +268,7 @@ pub fn evaluate_plugin_rules(
         let cache_key = patterns.join("|");
         let cache_key_clone = cache_key.clone();
 
-        let mut cache = PLUGIN_RULE_CACHE.lock().unwrap();
+        let mut cache = PLUGIN_RULE_CACHE.lock();
         let regex = cache
             .entry(cache_key)
             .or_insert_with(|| {
@@ -301,7 +297,6 @@ pub fn evaluate_plugin_rules(
 }
 
 #[cfg(feature = "plugin-system")]
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn check_rules_with_plugins(text: &str) -> (bool, Vec<String>) {
     let (_builtin_matched, builtin_types) = check_rules(text, &COMPILED_RULES, false);
 

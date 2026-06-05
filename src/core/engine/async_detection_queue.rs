@@ -1,10 +1,11 @@
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::config::settings::{Settings, SharedSettings};
+use crate::config::settings::SharedSettings;
 use crate::core::engine::waf_engine::{detect_request, DetectionResult};
 
 #[derive(Debug, Clone)]
@@ -13,10 +14,10 @@ pub struct DetectionTask {
     pub host: String,
     pub url: String,
     pub method: String,
-    pub headers: HashMap<String, String>,
-    pub cookies: HashMap<String, String>,
-    pub body: Vec<u8>,
-    pub args: HashMap<String, String>,
+    pub headers: Arc<HashMap<String, String>>,
+    pub cookies: Arc<HashMap<String, String>>,
+    pub body: Arc<Vec<u8>>,
+    pub args: Arc<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,25 +27,49 @@ pub struct AsyncDetectionResult {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+/// Lock-free async detection queue using N independent mpsc channels
+/// with atomic round-robin dispatch. Each worker exclusively owns its
+/// own Receiver — no Mutex contention on the receive path.
 pub struct AsyncDetectionQueue {
-    sender: mpsc::Sender<DetectionTask>,
+    senders: Vec<mpsc::Sender<DetectionTask>>,
+    next_worker: AtomicUsize,
     pub results: Arc<DashMap<String, AsyncDetectionResult>>,
 }
 
 impl AsyncDetectionQueue {
-    pub fn new(queue_size: usize) -> (Self, mpsc::Receiver<DetectionTask>) {
-        let (sender, receiver) = mpsc::channel::<DetectionTask>(queue_size);
-        let results = Arc::new(DashMap::new());
-
-        let queue = Self { sender, results };
-        (queue, receiver)
-    }
-
+    /// Submit a detection task to the queue (non-blocking).
+    ///
+    /// Uses atomic round-robin to pick a target worker channel, then
+    /// tries `try_send`. If that channel is full, falls through to the
+    /// next worker. Returns an error only when *all* worker channels
+    /// are full or closed.
     pub async fn submit(&self, task: DetectionTask) -> Result<(), String> {
-        self.sender
-            .send(task)
-            .await
-            .map_err(|e| format!("Failed to submit detection task: {}", e))
+        let worker_count = self.senders.len();
+        if worker_count == 0 {
+            return Err("No detection workers available".to_string());
+        }
+
+        let start = self.next_worker.fetch_add(1, Ordering::Relaxed) % worker_count;
+        let mut task = Some(task);
+
+        for i in 0..worker_count {
+            let idx = (start + i) % worker_count;
+            if let Some(t) = task.take() {
+                match self.senders[idx].try_send(t) {
+                    Ok(()) => return Ok(()),
+                    Err(mpsc::error::TrySendError::Full(t)) => {
+                        task = Some(t);
+                        continue;
+                    }
+                    Err(mpsc::error::TrySendError::Closed(t)) => {
+                        task = Some(t);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        Err("All detection worker channels are full".to_string())
     }
 
     #[cfg(test)]
@@ -58,6 +83,14 @@ impl AsyncDetectionQueue {
     pub fn remove_result(&self, request_id: &str) {
         self.results.remove(request_id);
     }
+}
+
+/// Auto-detect a sensible worker count: physical cores − 2, minimum 1.
+pub fn default_worker_count() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    cores.saturating_sub(2).max(1)
 }
 
 #[cfg(test)]
@@ -104,29 +137,31 @@ pub async fn detection_worker(
     }
 }
 
+/// Start N independent detection workers, each with its own lock-free
+/// mpsc channel. Tasks are dispatched via atomic round-robin in
+/// [`AsyncDetectionQueue::submit`].
 pub fn start_async_detection_workers(
     worker_count: usize,
     queue_size: usize,
     settings: SharedSettings,
 ) -> AsyncDetectionQueue {
-    let (queue, receiver) = AsyncDetectionQueue::new(queue_size);
-
-    let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
+    let per_worker_capacity = std::cmp::max(1, queue_size / worker_count);
+    let mut senders = Vec::with_capacity(worker_count);
+    let results = Arc::new(DashMap::new());
 
     for i in 0..worker_count {
-        let receiver_clone = receiver.clone();
+        let (sender, receiver) = mpsc::channel::<DetectionTask>(per_worker_capacity);
+        senders.push(sender);
+
         let settings_clone = settings.clone();
-        let results_clone = queue.results.clone();
+        let results_clone = results.clone();
 
         tokio::spawn(async move {
-            tracing::info!("Async detection worker {} started", i);
-            loop {
-                let task = {
-                    let mut rx = receiver_clone.lock().await;
-                    rx.recv().await
-                };
+            tracing::info!("Async detection worker {} started (lock-free)", i);
+            let mut rx = receiver;
 
-                match task {
+            loop {
+                match rx.recv().await {
                     Some(task) => {
                         let settings_snapshot = settings_clone.read().clone();
                         let request_id = task.request_id.clone();
@@ -166,10 +201,14 @@ pub fn start_async_detection_workers(
     }
 
     tracing::info!(
-        "Started {} async detection workers with queue size {}",
+        "Started {} async detection workers (lock-free) with per-worker queue size {}",
         worker_count,
-        queue_size
+        per_worker_capacity
     );
 
-    queue
+    AsyncDetectionQueue {
+        senders,
+        next_worker: AtomicUsize::new(0),
+        results,
+    }
 }

@@ -1,5 +1,4 @@
 #![cfg(feature = "redis-support")]
-#![allow(dead_code)]
 
 #[cfg(feature = "redis-support")]
 use std::time::Duration;

@@ -9,7 +9,6 @@ use std::sync::Arc;
 use crate::api::app::AppState;
 use crate::utils::crypto::constant_time_compare;
 
-#[allow(dead_code)]
 pub async fn init_token_auth_middleware(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

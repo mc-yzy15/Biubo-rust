@@ -1,5 +1,3 @@
-#![allow(unused_imports)]
-
 use crate::plugins::loader::PluginLoader;
 use crate::plugins::types::{PluginInstance, PluginType};
 use dashmap::DashMap;

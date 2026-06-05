@@ -1,5 +1,4 @@
 #![cfg(feature = "postgres-support")]
-#![allow(dead_code)]
 
 #[cfg(feature = "postgres-support")]
 use async_trait::async_trait;

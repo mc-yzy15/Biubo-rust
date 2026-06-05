@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
 
 #[cfg(feature = "plugin-system")]
 pub mod exporter_queue;

@@ -5,8 +5,7 @@ use axum::extract::Request;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Json, Response};
-use serde_json::json;
+use axum::response::Response;
 use std::sync::Arc;
 
 pub async fn api_key_auth_middleware(

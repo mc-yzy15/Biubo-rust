@@ -260,7 +260,6 @@ const DEFAULT_UPLOAD_EXTENSIONS: &[&str] = &[
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[allow(dead_code)]
 struct PersistedConfig {
     waf_port: Option<u16>,
     dashboard_password: Option<String>,

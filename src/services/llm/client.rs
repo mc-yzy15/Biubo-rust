@@ -1,6 +1,14 @@
 use crate::config::settings::Settings;
 
-static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(reqwest::Client::new);
+static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .pool_max_idle_per_host(64)
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .build()
+        .expect("Failed to build LLM service HTTP client")
+});
 
 pub async fn llm_call(
     question: &str,

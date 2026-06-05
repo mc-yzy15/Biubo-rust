@@ -1,6 +1,4 @@
-#![allow(dead_code)]
-
-use dashmap::DashMap;
+use moka::sync::Cache as MokaCache;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,6 +33,21 @@ static REPEAT_CHAR_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(.)\1{64,}")
         .expect("repeated char regex pattern is a safe literal")
 });
+
+/// URL 前缀白名单：匹配这些前缀的请求直接放行，不进入检测流程
+const URL_PREFIX_WHITELIST: &[&str] = &[
+    "/static/",
+    "/api/health",
+    "/.well-known/",
+    "/favicon.ico",
+    "/robots.txt",
+];
+
+/// 检查 URL 是否匹配前缀白名单
+#[inline]
+fn is_url_prefix_whitelisted(url: &str) -> bool {
+    URL_PREFIX_WHITELIST.iter().any(|prefix| url.starts_with(prefix))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectionResult {
@@ -124,7 +137,6 @@ impl DetectionResult {
     }
 
     #[cfg(feature = "llm-detection")]
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn error() -> Self {
         DetectionResult {
             detection_type: "error".to_string(),
@@ -140,70 +152,92 @@ impl DetectionResult {
     }
 }
 
-struct CacheEntry {
-    timestamp: std::time::Instant,
-    last_access: std::time::Instant,
-    data: DetectionResult,
-}
-
+#[derive(Clone)]
 struct HostCompiledRules {
     hash: String,
     compiled: Arc<HashMap<String, Regex>>,
 }
 
-static DETECTION_CACHE: once_cell::sync::Lazy<DashMap<String, CacheEntry>> =
-    once_cell::sync::Lazy::new(DashMap::new);
+static DETECTION_CACHE: once_cell::sync::Lazy<MokaCache<String, DetectionResult>> =
+    once_cell::sync::Lazy::new(|| {
+        MokaCache::builder()
+            .max_capacity(100_000)
+            .time_to_live(std::time::Duration::from_secs(60))
+            .build()
+    });
 
-static HOST_COMPILED_RULES: once_cell::sync::Lazy<DashMap<String, HostCompiledRules>> =
-    once_cell::sync::Lazy::new(DashMap::new);
+/// LLM 语义缓存：按内容哈希去重，避免相同内容重复调用 LLM
+static LLM_SEMANTIC_CACHE: once_cell::sync::Lazy<MokaCache<u64, String>> =
+    once_cell::sync::Lazy::new(|| {
+        MokaCache::builder()
+            .max_capacity(100_000)
+            .time_to_live(std::time::Duration::from_secs(300)) // TTL 5 分钟
+            .build()
+    });
 
-static HOST_RULE_HASH_CACHE: once_cell::sync::Lazy<DashMap<String, String>> =
-    once_cell::sync::Lazy::new(DashMap::new);
+/// 计算 LLM 语义缓存 key：基于 URL、body、UA、method、headers 指纹
+fn compute_llm_cache_key(url: &str, body: &[u8], ua: &str, method: &str, headers_fingerprint: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = ahash::AHasher::default();
+    url.hash(&mut hasher);
+    body.hash(&mut hasher);
+    ua.hash(&mut hasher);
+    method.hash(&mut hasher);
+    headers_fingerprint.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 计算 headers 指纹（仅核心字段，与 LLM 输入截断保持一致）
+fn compute_headers_fingerprint(headers: &HashMap<String, String>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = ahash::AHasher::default();
+    let core_keys = ["user-agent", "referer", "content-type", "x-forwarded-for"];
+    for key in &core_keys {
+        if let Some(v) = headers.get(*key).or_else(|| headers.get(&key.to_lowercase())) {
+            key.hash(&mut hasher);
+            v.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+static HOST_COMPILED_RULES: once_cell::sync::Lazy<MokaCache<String, HostCompiledRules>> =
+    once_cell::sync::Lazy::new(|| {
+        MokaCache::builder()
+            .max_capacity(10_000)
+            .time_to_idle(std::time::Duration::from_secs(3600))
+            .build()
+    });
 
 #[cfg(feature = "advanced-rules")]
-#[allow(dead_code)]
 static GLOBAL_RULE_ENGINE: once_cell::sync::Lazy<Option<Arc<RuleEngine>>> =
     once_cell::sync::Lazy::new(|| None);
 
 #[cfg(feature = "advanced-rules")]
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn set_global_rule_engine(engine: Arc<RuleEngine>) {
-    static ENGINE_REF: once_cell::sync::Lazy<std::sync::Mutex<Option<Arc<RuleEngine>>>> =
-        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+    static ENGINE_REF: once_cell::sync::Lazy<parking_lot::Mutex<Option<Arc<RuleEngine>>>> =
+        once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
 
-    if let Ok(mut guard) = ENGINE_REF.lock() {
-        *guard = Some(engine);
-    }
+    *ENGINE_REF.lock() = Some(engine);
 }
 
 #[cfg(feature = "advanced-rules")]
 fn get_global_rule_engine() -> Option<Arc<RuleEngine>> {
-    static ENGINE_REF: once_cell::sync::Lazy<std::sync::Mutex<Option<Arc<RuleEngine>>>> =
-        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+    static ENGINE_REF: once_cell::sync::Lazy<parking_lot::Mutex<Option<Arc<RuleEngine>>>> =
+        once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
 
-    if let Ok(guard) = ENGINE_REF.lock() {
-        guard.clone()
-    } else {
-        None
-    }
+    ENGINE_REF.lock().clone()
 }
 
 struct CacheStats {
-    hash_cache_hits: AtomicU64,
-    hash_cache_misses: AtomicU64,
     compiled_cache_hits: AtomicU64,
     compiled_cache_misses: AtomicU64,
 }
 
 static CACHE_STATS: LazyLock<CacheStats> = LazyLock::new(|| CacheStats {
-    hash_cache_hits: AtomicU64::new(0),
-    hash_cache_misses: AtomicU64::new(0),
     compiled_cache_hits: AtomicU64::new(0),
     compiled_cache_misses: AtomicU64::new(0),
 });
-
-const MAX_CACHE_SIZE: usize = 10000;
-const MAX_HOST_CACHE_SIZE: usize = 10000;
 
 const LLM_SYSTEM_INSTRUCTION: &str = r#"You are an HTTP security analysis engine. Your job: distinguish real attacks from normal user behavior.
 
@@ -246,7 +280,7 @@ Output a single JSON object. No explanation, no newlines, no extra characters.
 - `{"type":"normal"}`
 - `{"type":"hacker","attack_types":["sql_injection","scanner"]}`
 
-attack_types: xss, sql_injection, path_traversal, rce, ssrf, csrf, xxe, ssti, command_injection, scanner, account_takeover"#;
+attack_types: xss, sql_injection, path_traversal, rce, ssrf, csrf, xxe, ssti, command_injection, scanner, account_takeover, cc_attack"#;
 
 const LLM_USER_PROMPT_TEMPLATE: &str = r#"## Current Request
 - URL: {url}
@@ -259,28 +293,6 @@ const LLM_USER_PROMPT_TEMPLATE: &str = r#"## Current Request
 Analyze the above request and return ONLY a JSON object as specified in your instructions."#;
 
 pub fn get_host_rules(host: &str) -> Arc<HashMap<String, Regex>> {
-    if let Some(cached_hash_entry) = HOST_RULE_HASH_CACHE.get(host) {
-        CACHE_STATS.hash_cache_hits.fetch_add(1, Ordering::Relaxed);
-        let cached_hash = cached_hash_entry.value().clone();
-
-        if let Some(host_cache) = HOST_COMPILED_RULES.get(host) {
-            if host_cache.hash == cached_hash {
-                CACHE_STATS
-                    .compiled_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-                return host_cache.compiled.clone();
-            }
-        }
-
-        CACHE_STATS
-            .compiled_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
-    } else {
-        CACHE_STATS
-            .hash_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
     let db = get_db(host);
     let security = db.ram_get("security").unwrap_or(serde_json::json!({}));
     let waf_rules = security
@@ -290,12 +302,7 @@ pub fn get_host_rules(host: &str) -> Arc<HashMap<String, Regex>> {
 
     let rule_hash = compute_rule_hash(&waf_rules);
 
-    HOST_RULE_HASH_CACHE.insert(host.to_string(), rule_hash.clone());
-
-    if HOST_RULE_HASH_CACHE.len() > MAX_HOST_CACHE_SIZE {
-        tracing::warn!("HOST_RULE_HASH_CACHE size ({}) exceeds limit ({})", HOST_RULE_HASH_CACHE.len(), MAX_HOST_CACHE_SIZE);
-    }
-
+    // Fast path: check cache with hash verification
     if let Some(host_cache) = HOST_COMPILED_RULES.get(host) {
         if host_cache.hash == rule_hash {
             CACHE_STATS
@@ -303,12 +310,16 @@ pub fn get_host_rules(host: &str) -> Arc<HashMap<String, Regex>> {
                 .fetch_add(1, Ordering::Relaxed);
             return host_cache.compiled.clone();
         }
+        CACHE_STATS
+            .compiled_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    } else {
+        CACHE_STATS
+            .compiled_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
     }
 
-    CACHE_STATS
-        .compiled_cache_misses
-        .fetch_add(1, Ordering::Relaxed);
-
+    // Slow path: compile rules
     let mut compiled = HashMap::new();
     if let Some(obj) = waf_rules.as_object() {
         for (attack_type, patterns) in obj {
@@ -343,14 +354,10 @@ pub fn get_host_rules(host: &str) -> Arc<HashMap<String, Regex>> {
     HOST_COMPILED_RULES.insert(
         host.to_string(),
         HostCompiledRules {
-            hash: rule_hash.clone(),
+            hash: rule_hash,
             compiled: compiled_arc.clone(),
         },
     );
-
-    if HOST_COMPILED_RULES.len() > MAX_HOST_CACHE_SIZE {
-        tracing::warn!("HOST_COMPILED_RULES size ({}) exceeds limit ({})", HOST_COMPILED_RULES.len(), MAX_HOST_CACHE_SIZE);
-    }
 
     compiled_arc
 }
@@ -358,28 +365,19 @@ pub fn get_host_rules(host: &str) -> Arc<HashMap<String, Regex>> {
 fn compute_rule_hash(rules: &Value) -> String {
     use std::hash::{Hash, Hasher};
     let serialized = serde_json::to_string(rules).unwrap_or_default();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = ahash::AHasher::default();
     serialized.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 
 pub fn invalidate_all_rules_cache() -> Result<(), String> {
-    HOST_RULE_HASH_CACHE.clear();
-    HOST_COMPILED_RULES.clear();
+    HOST_COMPILED_RULES.invalidate_all();
     tracing::info!("All WAF rules cache invalidated");
     Ok(())
 }
 
 pub fn get_cache_stats() -> HashMap<String, u64> {
     let mut stats = HashMap::new();
-    stats.insert(
-        "hash_cache_hits".to_string(),
-        CACHE_STATS.hash_cache_hits.load(Ordering::Relaxed),
-    );
-    stats.insert(
-        "hash_cache_misses".to_string(),
-        CACHE_STATS.hash_cache_misses.load(Ordering::Relaxed),
-    );
     stats.insert(
         "compiled_cache_hits".to_string(),
         CACHE_STATS.compiled_cache_hits.load(Ordering::Relaxed),
@@ -425,6 +423,43 @@ pub fn initialize_waf_cache_background(hosts: Vec<String>) {
     });
 }
 
+/// 对单个正则按字段优先级逐字段匹配，命中即返回 true。
+/// 优先级：URL > body > header values > cookie values
+/// 消除了每次请求的 target 字符串拼接分配。
+#[inline]
+fn matches_any_field(
+    pattern: &Regex,
+    url: &str,
+    data: &str,
+    headers: &HashMap<String, String>,
+    cookies: &HashMap<String, String>,
+) -> bool {
+    // URL 匹配（命中概率最高，优先检查）
+    if pattern.is_match(url) {
+        return true;
+    }
+    // Body 匹配
+    if !data.is_empty() && pattern.is_match(data) {
+        return true;
+    }
+    // Header values 匹配
+    for v in headers.values() {
+        if pattern.is_match(v) {
+            return true;
+        }
+    }
+    // Cookie values 匹配
+    for v in cookies.values() {
+        if pattern.is_match(v) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 对请求各字段分别进行正则匹配，而非拼接成单一 target 字符串。
+/// 按字段优先级（URL > body > headers > cookies）逐规则检查，
+/// 消除了每次请求的 String 分配开销。
 pub fn check_rules(
     url: &str,
     headers: &HashMap<String, String>,
@@ -433,24 +468,11 @@ pub fn check_rules(
     host_rules: Option<&Arc<HashMap<String, Regex>>>,
     early_exit: bool,
 ) -> (bool, Vec<String>) {
-    let mut target = String::with_capacity(url.len() + data.len() + 256);
-    target.push_str(url);
-    target.push(' ');
-    for v in headers.values() {
-        target.push_str(v);
-        target.push(' ');
-    }
-    for v in cookies.values() {
-        target.push_str(v);
-        target.push(' ');
-    }
-    target.push_str(data);
-
     let mut matched = Vec::new();
     match host_rules {
         Some(rules) => {
             for (attack_type, pattern) in rules.iter() {
-                if pattern.is_match(&target) {
+                if matches_any_field(pattern, url, data, headers, cookies) {
                     matched.push(attack_type.clone());
                     if early_exit {
                         return (true, matched);
@@ -460,7 +482,7 @@ pub fn check_rules(
         }
         None => {
             for (attack_type, pattern) in COMPILED_RULES.iter() {
-                if pattern.is_match(&target) {
+                if matches_any_field(pattern, url, data, headers, cookies) {
                     matched.push(attack_type.to_string());
                     if early_exit {
                         return (true, matched);
@@ -474,7 +496,7 @@ pub fn check_rules(
 
 pub fn cache_key(url: &str, method: &str, data: &str) -> String {
     use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = ahash::AHasher::default();
     method.hash(&mut hasher);
     url.hash(&mut hasher);
     data.hash(&mut hasher);
@@ -492,6 +514,11 @@ pub async fn detect_request(
     host: &str,
 ) -> DetectionResult {
     if is_static_resource(url, &settings.static_extensions) {
+        return DetectionResult::normal();
+    }
+
+    // URL 前缀白名单：直接放行，不进入检测流程
+    if is_url_prefix_whitelisted(url) {
         return DetectionResult::normal();
     }
 
@@ -568,6 +595,19 @@ pub async fn detect_request(
         return DetectionResult::hacker(attack_types);
     }
 
+    // 前置拦截：behavior_score ≥ 80 直接判定为 hacker，不进入 LLM
+    let reputation_score = extract_reputation_score(headers);
+    let behavior_score = threat_signals::compute_behavior_score_only(headers, &parsed_body);
+
+    if behavior_score >= 80.0 {
+        return DetectionResult::hacker(vec!["high_behavior_score".to_string()]);
+    }
+
+    // 前置拦截：reputation_score ≥ 90 直接判定为 hacker，不进入 LLM
+    if reputation_score >= 90.0 {
+        return DetectionResult::hacker(vec!["high_reputation_score".to_string()]);
+    }
+
     let data_combined = format!(
         "{}|{}",
         parsed_body,
@@ -575,18 +615,14 @@ pub async fn detect_request(
     );
     let key = cache_key(url, method, &data_combined);
 
-    if let Some(mut entry) = DETECTION_CACHE.get_mut(&key) {
-        if entry.timestamp.elapsed().as_secs() < settings.cache_ttl as u64 {
-            entry.last_access = std::time::Instant::now();
-            return entry.data.clone();
-        }
+    if let Some(cached_result) = DETECTION_CACHE.get(&key) {
+        return cached_result;
     }
 
     if settings.api_key.is_empty() {
         return DetectionResult::normal();
     }
 
-    let reputation_score = extract_reputation_score(headers);
     let ip_history = build_ip_history(host, headers);
 
     let signals = threat_signals::compute_threat_signals(
@@ -597,22 +633,51 @@ pub async fn detect_request(
     );
 
     if signals.has_any_signal() {
+        // LLM 语义缓存：查询是否已有相同内容的 LLM 判定结果
+        let ua = headers.get("user-agent").map(|v| v.as_str()).unwrap_or("");
+        let headers_fp = compute_headers_fingerprint(headers);
+        let llm_cache_key = compute_llm_cache_key(url, body, ua, method, headers_fp);
+
+        if let Some(cached_verdict) = LLM_SEMANTIC_CACHE.get(&llm_cache_key) {
+            tracing::debug!("LLM semantic cache hit for {}", url);
+            let detection = match serde_json::from_str::<DetectionResult>(&cached_verdict) {
+                Ok(d) => d,
+                Err(_) => {
+                    LLM_SEMANTIC_CACHE.invalidate(&llm_cache_key);
+                    DetectionResult::normal()
+                }
+            };
+            let enhanced_result = DetectionResult::from_threat_signals(
+                detection.attack_types,
+                &signals,
+                1,
+                detection.detection_type.clone(),
+            );
+            DETECTION_CACHE.insert(key, enhanced_result.clone());
+            return enhanced_result;
+        }
+
         let history = build_history(host, headers);
+
+        // LLM 输入截断：减少 token 消耗
+        let truncated_headers = truncate_headers_for_llm(headers);
+        let truncated_cookies = truncate_cookies_for_llm(cookies);
+        let truncated_body = truncate_body_for_llm(&data_combined);
 
         let escaped_url = html_escape_for_prompt(url);
         let escaped_headers =
-            html_escape_for_prompt(&serde_json::to_string(headers).unwrap_or_default());
+            html_escape_for_prompt(&serde_json::to_string(&truncated_headers).unwrap_or_default());
         let escaped_cookies =
-            html_escape_for_prompt(&serde_json::to_string(cookies).unwrap_or_default());
-        let escaped_data = html_escape_for_prompt(&data_combined);
+            html_escape_for_prompt(&serde_json::to_string(&truncated_cookies).unwrap_or_default());
+        let escaped_data = html_escape_for_prompt(truncated_body);
         let escaped_history = html_escape_for_prompt(&history);
 
         let prompt = LLM_USER_PROMPT_TEMPLATE
-            .replace("{url}", &optimize_for_llm(&escaped_url, 1024))
+            .replace("{url}", &optimize_for_llm(&escaped_url, 256))
             .replace("{method}", method)
-            .replace("{headers}", &optimize_for_llm(&escaped_headers, 2048))
-            .replace("{cookies}", &optimize_for_llm(&escaped_cookies, 1024))
-            .replace("{data}", &optimize_for_llm(&escaped_data, 8192))
+            .replace("{headers}", &optimize_for_llm(&escaped_headers, 256))
+            .replace("{cookies}", &optimize_for_llm(&escaped_cookies, 128))
+            .replace("{data}", &optimize_for_llm(&escaped_data, 512))
             .replace("{history}", &escaped_history);
 
         let full_prompt = format!("{}\n\n{}", LLM_SYSTEM_INSTRUCTION, prompt);
@@ -661,38 +726,20 @@ pub async fn detect_request(
         };
 
         let llm_verdict = detection.detection_type.clone();
+        let attack_types = detection.attack_types.clone();
         let enhanced_result = DetectionResult::from_threat_signals(
-            detection.attack_types,
+            attack_types,
             &signals,
             1,
             llm_verdict.clone(),
         );
 
-        if DETECTION_CACHE.len() >= MAX_CACHE_SIZE {
-            // O(n) eviction: remove 25% oldest entries by scanning for a threshold
-            let remove_count = DETECTION_CACHE.len() / 4;
-            let mut timestamps: Vec<(String, std::time::Instant)> = DETECTION_CACHE
-                .iter()
-                .map(|e| (e.key().clone(), e.value().last_access))
-                .collect();
-            // Quickselect-style: find the threshold timestamp for removal
-            // Instead of full sort, use select_nth_unstable_by_key for O(n)
-            let split_idx = remove_count.min(timestamps.len().saturating_sub(1));
-            if split_idx > 0 {
-                timestamps.select_nth_unstable_by_key(split_idx, |(_, t)| *t);
-                let threshold = timestamps[split_idx].1;
-                DETECTION_CACHE.retain(|_, v| v.last_access >= threshold);
-            }
+        // 写入 LLM 语义缓存
+        if let Ok(serialized) = serde_json::to_string(&detection) {
+            LLM_SEMANTIC_CACHE.insert(llm_cache_key, serialized);
         }
 
-        DETECTION_CACHE.insert(
-            key,
-            CacheEntry {
-                timestamp: std::time::Instant::now(),
-                last_access: std::time::Instant::now(),
-                data: enhanced_result.clone(),
-            },
-        );
+        DETECTION_CACHE.insert(key, enhanced_result.clone());
 
         return enhanced_result;
     }
@@ -836,6 +883,33 @@ fn optimize_for_llm(s: &str, limit: usize) -> String {
     }
 }
 
+/// LLM 输入截断：只保留核心 headers（user-agent / referer / content-type / x-forwarded-for）
+fn truncate_headers_for_llm(headers: &HashMap<String, String>) -> HashMap<String, String> {
+    const CORE_KEYS: &[&str] = &["user-agent", "referer", "content-type", "x-forwarded-for"];
+    let mut result = HashMap::with_capacity(CORE_KEYS.len());
+    for key in CORE_KEYS {
+        if let Some(v) = headers.get(*key).or_else(|| headers.get(&key.to_lowercase())) {
+            result.insert(key.to_string(), v.clone());
+        }
+    }
+    result
+}
+
+/// LLM 输入截断：只保留前 5 个 cookies
+fn truncate_cookies_for_llm(cookies: &HashMap<String, String>) -> HashMap<String, String> {
+    cookies.iter().take(5).map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// LLM 输入截断：body 超过 2KB 截断
+fn truncate_body_for_llm(body: &str) -> &str {
+    const MAX_BODY_LEN: usize = 2048;
+    if body.len() <= MAX_BODY_LEN {
+        body
+    } else {
+        &body[..MAX_BODY_LEN]
+    }
+}
+
 fn extract_json(text: &str) -> Option<Value> {
     let text = text.trim();
 
@@ -862,28 +936,9 @@ fn extract_json(text: &str) -> Option<Value> {
     None
 }
 
-/// Starts a background garbage-collection worker for the detection result cache.
-///
-/// # Design rationale: why `std::thread::spawn` instead of `tokio::task::spawn`
-///
-/// - The worker calls `DETECTION_CACHE.retain(...)`, which is a purely synchronous
-///   DashMap operation (no `.await` points), so there is no benefit to running it
-///   inside the async runtime.
-/// - Using a dedicated OS thread prevents this long-lived sleeping loop from
-///   consuming tokio task resources, ensuring the runtime stays responsive for
-///   actual request processing.
-/// - `std::thread::sleep` in a tokio task would block the worker thread entirely;
-///   by using a separate OS thread we avoid that problem altogether.
-pub fn start_cache_gc_worker(cache_ttl: u64, gc_interval: u64) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(gc_interval));
-        DETECTION_CACHE.retain(|_, v| v.timestamp.elapsed().as_secs() < cache_ttl);
-    });
-}
-
 pub fn quick_detect_request(
     url: &str,
-    #[allow(unused_variables)] method: &str,
+    method: &str,
     headers: &HashMap<String, String>,
     cookies: &HashMap<String, String>,
     body: &[u8],
@@ -892,6 +947,11 @@ pub fn quick_detect_request(
     host: &str,
 ) -> DetectionResult {
     if is_static_resource(url, &settings.static_extensions) {
+        return DetectionResult::normal();
+    }
+
+    // URL 前缀白名单：直接放行，不进入检测流程
+    if is_url_prefix_whitelisted(url) {
         return DetectionResult::normal();
     }
 
@@ -962,6 +1022,19 @@ pub fn quick_detect_request(
         return DetectionResult::hacker(attack_types);
     }
 
+    // 前置拦截：behavior_score ≥ 80 直接判定为 hacker，不进入 LLM
+    let reputation_score = extract_reputation_score(headers);
+    let behavior_score = threat_signals::compute_behavior_score_only(headers, &parsed_body);
+
+    if behavior_score >= 80.0 {
+        return DetectionResult::hacker(vec!["high_behavior_score".to_string()]);
+    }
+
+    // 前置拦截：reputation_score ≥ 90 直接判定为 hacker，不进入 LLM
+    if reputation_score >= 90.0 {
+        return DetectionResult::hacker(vec!["high_reputation_score".to_string()]);
+    }
+
     let data_combined = format!(
         "{}|{}",
         parsed_body,
@@ -969,11 +1042,8 @@ pub fn quick_detect_request(
     );
     let key = cache_key(url, method, &data_combined);
 
-    if let Some(mut entry) = DETECTION_CACHE.get_mut(&key) {
-        if entry.timestamp.elapsed().as_secs() < settings.cache_ttl as u64 {
-            entry.last_access = std::time::Instant::now();
-            return entry.data.clone();
-        }
+    if let Some(cached_result) = DETECTION_CACHE.get(&key) {
+        return cached_result;
     }
 
     DetectionResult::normal()

@@ -102,7 +102,6 @@ pub fn decode_content(content: &[u8], encoding: &str) -> Vec<u8> {
     }
 }
 
-#[allow(dead_code)]
 pub fn encode_content(content: &[u8], encoding: &str) -> Vec<u8> {
     if content.is_empty() || encoding.is_empty() {
         return content.to_vec();
