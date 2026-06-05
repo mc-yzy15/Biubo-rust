@@ -1,5 +1,7 @@
 pub mod base;
+pub mod flusher_pool;
 pub mod manager;
+pub mod storage_utils;
 
 use serde::{Deserialize, Serialize};
 

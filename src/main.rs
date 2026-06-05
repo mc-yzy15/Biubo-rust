@@ -1,5 +1,8 @@
 #![allow(unused_imports)]
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use crate::api::app::create_app_with_async_detection;
 use crate::config::settings::{Settings, SharedSettings};
 use crate::core::engine::async_detection_queue::start_async_detection_workers;
@@ -88,6 +91,34 @@ async fn main() {
     tracing::info!("Background GC workers started");
 
     let app = create_app_with_async_detection(settings.clone(), async_detection_queue);
+
+    let shutdown_signal = {
+        use tokio::signal;
+
+        #[cfg(unix)]
+        let sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                Box::pin(async move { sig.recv().await; }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            }
+            Err(e) => {
+                tracing::warn!("Failed to register SIGTERM handler ({}), using only SIGINT", e);
+                Box::pin(std::future::pending::<()>()) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            }
+        };
+        #[cfg(not(unix))]
+        let sigterm = Box::pin(std::future::pending::<()>()) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+        async move {
+            tokio::select! {
+                _ = signal::ctrl_c() => {
+                    tracing::info!("Received SIGINT, shutting down gracefully...");
+                }
+                _ = sigterm => {
+                    tracing::info!("Received SIGTERM, shutting down gracefully...");
+                }
+            }
+        }
+    };
 
     #[cfg(feature = "ssl-support")]
     if ssl_enabled && !ssl_domains.is_empty() && !ssl_acme_email.is_empty() {
@@ -204,7 +235,10 @@ async fn main() {
             }
         };
 
-        if let Err(e) = axum::serve(listener, app).await {
+        if let Err(e) = axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal)
+            .await
+        {
             tracing::error!("Server error: {}", e);
         }
     }

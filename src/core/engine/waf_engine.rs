@@ -669,14 +669,19 @@ pub async fn detect_request(
         );
 
         if DETECTION_CACHE.len() >= MAX_CACHE_SIZE {
-            let mut entries: Vec<(String, std::time::Instant)> = DETECTION_CACHE
+            // O(n) eviction: remove 25% oldest entries by scanning for a threshold
+            let remove_count = DETECTION_CACHE.len() / 4;
+            let mut timestamps: Vec<(String, std::time::Instant)> = DETECTION_CACHE
                 .iter()
                 .map(|e| (e.key().clone(), e.value().last_access))
                 .collect();
-            entries.sort_by_key(|(_, t)| *t);
-            let remove_count = entries.len() / 4;
-            for (key, _) in entries.iter().take(remove_count) {
-                DETECTION_CACHE.remove(key);
+            // Quickselect-style: find the threshold timestamp for removal
+            // Instead of full sort, use select_nth_unstable_by_key for O(n)
+            let split_idx = remove_count.min(timestamps.len().saturating_sub(1));
+            if split_idx > 0 {
+                timestamps.select_nth_unstable_by_key(split_idx, |(_, t)| *t);
+                let threshold = timestamps[split_idx].1;
+                DETECTION_CACHE.retain(|_, v| v.last_access >= threshold);
             }
         }
 

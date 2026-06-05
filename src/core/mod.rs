@@ -1,6 +1,7 @@
 pub mod behavior;
 pub mod engine;
 pub mod llm;
+pub mod metrics;
 pub mod models;
 pub mod reputation;
 pub mod rules;

@@ -213,15 +213,11 @@ fn flush_session(sid: &str, session: &Session) {
 
     if log.country.is_empty() {
         let cdn_ip = log.cdn_ip.clone();
-        let cdn_ip_for_task = cdn_ip.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build();
-            if let Ok(handle) = rt {
-                let info = handle.block_on(async { get_ip_info(&cdn_ip_for_task).await });
-                tracing::debug!("IP info fetched for {}: {:?}", cdn_ip_for_task, info);
-            }
+        // Use tokio::spawn instead of std::thread::spawn to avoid creating a new
+        // OS thread + Tokio runtime per session with missing geo data.
+        tokio::spawn(async move {
+            let info = get_ip_info(&cdn_ip).await;
+            tracing::debug!("IP info fetched for {}: {:?}", cdn_ip, info);
         });
     }
 
