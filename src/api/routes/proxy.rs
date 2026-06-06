@@ -238,7 +238,6 @@ async fn reverse_proxy(
                             Some(BlockReason::TemporaryBanned) => "temporary_banned",
                             Some(BlockReason::RateLimit) => "rate_limit",
                             Some(BlockReason::GrayZoneBan) => "gray_zone_ban",
-                            Some(BlockReason::CcAttack) => "cc_attack",
                             None => "unknown",
                         };
                         let _ = db.ban_ip_temporary(&client_ip, reason).await;

@@ -53,3 +53,6 @@ pnpm-debug.log*
 .env
 .env.local
 .env.*.local
+
+# Commercial Edition (NEVER push to public remote)
+commercial/

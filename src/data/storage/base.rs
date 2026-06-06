@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -104,31 +103,12 @@ impl Database {
         self.dirty.store(true, Ordering::Release);
     }
 
-    #[cfg(feature = "plugin-system")]
-    pub fn delete(&self, key: &str) -> bool {
-        let mut guard = self.data.lock();
-        let removed = guard.remove(key).is_some();
-        if removed {
-            self.dirty.store(true, Ordering::Release);
-        }
-        removed
-    }
-
-    pub fn len(&self) -> usize {
-        self.data.lock().len()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.data.lock().is_empty()
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
         self.data.lock().contains_key(key)
-    }
-
-    pub fn keys(&self) -> Vec<String> {
-        let guard = self.data.lock();
-        guard.keys().cloned().collect()
     }
 
     pub fn flush(&self) -> std::io::Result<()> {

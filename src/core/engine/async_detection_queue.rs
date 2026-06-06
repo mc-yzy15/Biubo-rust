@@ -33,6 +33,7 @@ pub struct AsyncDetectionResult {
 pub struct AsyncDetectionQueue {
     senders: Vec<mpsc::Sender<DetectionTask>>,
     next_worker: AtomicUsize,
+    #[cfg(test)]
     pub results: Arc<DashMap<String, AsyncDetectionResult>>,
 }
 
@@ -209,6 +210,7 @@ pub fn start_async_detection_workers(
     AsyncDetectionQueue {
         senders,
         next_worker: AtomicUsize::new(0),
+        #[cfg(test)]
         results,
     }
 }

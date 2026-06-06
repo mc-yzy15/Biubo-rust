@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
 use crate::config::settings::Settings;
@@ -34,23 +33,6 @@ fn start_log_writer_worker(mut rx: tokio::sync::mpsc::UnboundedReceiver<PendingL
             }
         });
     });
-}
-
-#[cfg(feature = "plugin-system")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BanRecord {
-    pub reason: String,
-    pub expire: Option<u32>,
-    pub added_at: String,
-    pub country: String,
-    pub city: String,
-}
-
-#[cfg(feature = "plugin-system")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhitelistRecord {
-    pub remark: String,
-    pub added_at: String,
 }
 
 pub struct ProxyDB {
@@ -229,21 +211,14 @@ impl ProxyDB {
     }
 
     pub fn write_log_direct(&self, entry: serde_json::Value) {
-        #[cfg(feature = "plugin-system")]
-        let entry_for_exporter = entry.clone();
-
         // Use the new O(1) individual-key path when a request_id is present.
         if entry.get("request_id").and_then(|v| v.as_str()).is_some() {
             self.write_log_entry(entry);
-            #[cfg(feature = "plugin-system")]
-            tokio::spawn(async move {
-                crate::plugins::trigger_exporters(entry_for_exporter).await;
-            });
             return;
         }
 
         // Legacy path for entries without request_id
-        let should_export = {
+        let _ = {
             let _guard = self.lock.lock();
             let _ = self.ensure_log_db();
             let log_db = self.log_db.lock();
@@ -261,18 +236,8 @@ impl ProxyDB {
 
                 logs.push(entry);
                 db.set("logs", serde_json::json!(logs));
-                true
-            } else {
-                false
             }
         };
-
-        if should_export {
-            #[cfg(feature = "plugin-system")]
-            tokio::spawn(async move {
-                crate::plugins::trigger_exporters(entry_for_exporter).await;
-            });
-        }
     }
 
     pub fn ram_get(&self, key: &str) -> Option<serde_json::Value> {
@@ -654,18 +619,4 @@ pub fn get_db(host: &str) -> Arc<ProxyDB> {
             }
         })
         .clone()
-}
-
-/// Flush all ProxyDB instances (used during graceful shutdown).
-/// Ensures all pending writes are persisted before the process exits.
-pub async fn flush_all() {
-    tracing::info!("Flushing all ProxyDB instances...");
-    let count = PROXY_DBS.len();
-    for entry in PROXY_DBS.iter() {
-        entry.ram.flush().ok();
-        if let Some(log_db) = entry.get_log_db() {
-            log_db.flush().ok();
-        }
-    }
-    tracing::info!("Flushed {} ProxyDB instances", count);
 }

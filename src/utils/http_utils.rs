@@ -20,10 +20,6 @@ pub static STRIP_RESP_HEADERS: &[&str] = &[
     "x-powered-by",
 ];
 
-pub fn get_client_ip(headers: &axum::http::HeaderMap, config: &IpHeaderConfig) -> String {
-    get_client_ip_with_trust(headers, config, "")
-}
-
 pub fn get_client_ip_with_trust(
     headers: &axum::http::HeaderMap,
     config: &IpHeaderConfig,
@@ -203,84 +199,4 @@ pub async fn get_ip_reputation(ip: &str) -> bool {
     }
 }
 
-pub async fn verify_captcha(ticket: &str) -> bool {
-    match HTTP_CLIENT
-        .post("https://captcha.zplb.org.cn/api/verify")
-        .json(&serde_json::json!({"ticket": ticket}))
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
-    {
-        Ok(resp) => match resp.json::<serde_json::Value>().await {
-            Ok(v) => v
-                .get("success")
-                .and_then(|s| s.as_bool())
-                .unwrap_or(false),
-            Err(e) => {
-                tracing::error!("Captcha verification failed: {}", e);
-                false
-            }
-        },
-        Err(e) => {
-            tracing::error!("Captcha verification failed: {}", e);
-            false
-        }
-    }
-}
 
-pub fn get_source_from_referer(referer: &str) -> String {
-    if referer.is_empty() {
-        return "direct".to_string();
-    }
-
-    let referer_lower = referer.to_lowercase();
-
-    let search_engines = [
-        "google.",
-        "bing.",
-        "baidu.",
-        "duckduckgo.",
-        "yahoo.",
-        "yandex.",
-        "sogou.",
-        "so.com",
-        "360.cn",
-        "naver.",
-        "daum.",
-        "ask.",
-        "ecosia.",
-        "brave.com/search",
-    ];
-
-    let social_networks = [
-        "twitter.",
-        "t.co",
-        "x.com",
-        "facebook.",
-        "fb.com",
-        "instagram.",
-        "linkedin.",
-        "weibo.",
-        "wechat.",
-        "wx.qq.com",
-        "tiktok.",
-        "douyin.",
-        "youtube.",
-        "youtu.be",
-        "pinterest.",
-        "reddit.",
-        "telegram.",
-        "whatsapp.",
-        "line.",
-        "discord.",
-        "snapchat.",
-    ];
-
-    if search_engines.iter().any(|s| referer_lower.contains(s)) {
-        return "search".to_string();
-    }
-    if social_networks.iter().any(|s| referer_lower.contains(s)) {
-        return "social".to_string();
-    }
-    "referral".to_string()
-}

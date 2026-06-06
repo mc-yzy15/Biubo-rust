@@ -85,7 +85,6 @@ pub enum BlockReason {
     TemporaryBanned,
     RateLimit,
     GrayZoneBan,
-    CcAttack,
 }
 
 pub struct RateLimitResult {
@@ -95,7 +94,6 @@ pub struct RateLimitResult {
 
 pub struct CcCheckResult {
     pub blocked: bool,
-    pub reason: Option<BlockReason>,
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +275,6 @@ pub fn check_cc_attack(ip: &str, url: &str, user_agent: &str) -> CcCheckResult {
         if now < until {
             return CcCheckResult {
                 blocked: true,
-                reason: Some(BlockReason::CcAttack),
             };
         }
         // Ban expired, reset
@@ -324,7 +321,6 @@ pub fn check_cc_attack(ip: &str, url: &str, user_agent: &str) -> CcCheckResult {
             );
             CcCheckResult {
                 blocked: true,
-                reason: Some(BlockReason::CcAttack),
             }
         } else {
             tracing::info!(
@@ -337,13 +333,11 @@ pub fn check_cc_attack(ip: &str, url: &str, user_agent: &str) -> CcCheckResult {
             );
             CcCheckResult {
                 blocked: false,
-                reason: None,
             }
         }
     } else {
         CcCheckResult {
             blocked: false,
-            reason: None,
         }
     }
 }
