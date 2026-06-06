@@ -1,5 +1,15 @@
 use crate::config::settings::Settings;
 
+static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .pool_max_idle_per_host(64)
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .build()
+        .expect("Failed to build LLM service HTTP client")
+});
+
 pub async fn llm_call(
     question: &str,
     thinking: bool,
@@ -23,9 +33,7 @@ pub async fn llm_call(
         body["enable_thinking"] = serde_json::json!(true);
     }
 
-    let client = reqwest::Client::new();
-
-    let response = match client
+    let response = match HTTP_CLIENT
         .post(format!(
             "{}/chat/completions",
             settings.llm_base_url.trim_end_matches('/')

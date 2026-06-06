@@ -3,7 +3,34 @@ name = "biubo-waf"
 version = "1.0.0-alpha"
 edition = "2021"
 description = "A Web Application Firewall that Thinks, Remembers, and Visualizes"
-license = "MIT"
+license = "AGPL-3.0-or-later"
+authors = ["mc-yzy15 <yingmoliuguang@yeah.net>"]
+homepage = "https://github.com/mc-yzy15/Biubo-rust"
+repository = "https://github.com/mc-yzy15/Biubo-rust"
+readme = "README.md"
+
+[package.metadata.deb]
+maintainer = "mc-yzy15 <yingmoliuguang@yeah.net>"
+copyright = "2024, mc-yzy15 <yingmoliuguang@yeah.net>"
+license-file = ["LICENSE", "0"]
+depends = "systemd"
+extended-description = """\
+Biubo WAF is a Web Application Firewall that provides intelligent protection \
+with AI-powered threat detection, session replay, and real-time visualization."""
+section = "utility"
+priority = "optional"
+assets = [
+    ["target/release/biubo-waf", "/usr/bin/biubo-waf", "755"],
+    ["systemd/biubo-waf.service", "/lib/systemd/system/biubo-waf.service", "644"],
+]
+maintainer-scripts = "debian/"
+systemd-units = { unit-name = "biubo-waf", enable = false, start = false }
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/biubo-waf", dest = "/usr/bin/biubo-waf", mode = "0755" },
+    { source = "systemd/biubo-waf.service", dest = "/usr/lib/systemd/system/biubo-waf.service", mode = "0644" },
+]
 
 [dependencies]
 axum = { version = "0.8", features = ["macros", "ws"] }
@@ -17,8 +44,13 @@ serde_json = "1"
 serde_urlencoded = "0.7"
 
 regex = "1"
+# TODO(Task 1.4): 引入 regex-automata 的 RegexSet 实现多模式并行匹配，
+# 将 N 次独立 is_match 调用合并为 1 次 RegexSet.matches() 调用，
+# 预期在规则数量较多时显著降低 CPU 开销。
+# regex-automata = "0.4"
 rmp-serde = "1"
 dashmap = "6"
+moka = { version = "0.12", features = ["future", "sync"] }
 
 flate2 = "1"
 brotli = "7"
@@ -26,6 +58,9 @@ brotli = "7"
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+bcrypt = "0.16"
+subtle = "2"
+thiserror = "2"
 
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -40,7 +75,35 @@ percent-encoding = "2"
 sysinfo = "0.33"
 
 once_cell = "1"
+ahash = "0.8"
 parking_lot = "0.12"
+mimalloc = { version = "0.1", default-features = false }
+
+async-trait = "0.1"
+redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp", "connection-manager"], optional = true }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"], optional = true }
+deadpool-postgres = { version = "0.14", optional = true }
+rcgen = "0.13"
+rustls-acme = "0.12"
+rustls = "0.23"
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+hickory-resolver = { version = "0.24", features = ["tokio"] }
+
+[features]
+default = ["full"]
+llm-detection = []
+advanced-rules = []
+behavior-profiling = []
+cluster-mode = ["redis-support"]
+ssl-support = []
+plugin-system = []
+full = ["llm-detection", "advanced-rules", "behavior-profiling", "cluster-mode", "ssl-support", "plugin-system", "redis-support", "postgres-support"]
+redis-support = ["dep:redis"]
+postgres-support = ["dep:tokio-postgres", "dep:deadpool-postgres"]
+
+[dev-dependencies]
+mockito = "1"
 
 [profile.release]
 opt-level = 3

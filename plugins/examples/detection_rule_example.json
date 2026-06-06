@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "name": "custom_bot_detection",
+    "version": "1.0.0",
+    "description": "Detects automated bot traffic by identifying suspicious user-agent patterns commonly used by scrapers, crawlers, and automated HTTP clients",
+    "author": "biubo-team",
+    "type": "detection"
+  },
+  "config": {
+    "patterns": [
+      "(?i)(?:bot|crawler|spider|scraper|harvester)",
+      "(?i)python-requests(?:\\/|$)",
+      "(?i)python-httpx(?:\\/|$)",
+      "(?i)curl(?:\\/|$)",
+      "(?i)wget(?:\\/|$)",
+      "(?i)go-http-client",
+      "(?i)java(?:\\/| )",
+      "(?i)libwww-perl",
+      "(?i)apache-httpclient",
+      "(?i)okhttp",
+      "(?i)scrapy",
+      "(?i)selenium",
+      "(?i)puppeteer",
+      "(?i)headlesschrome",
+      "(?i)phantomjs"
+    ],
+    "attack_type": "bot_detection"
+  }
+}

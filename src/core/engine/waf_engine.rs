@@ -1,13 +1,17 @@
-use dashmap::DashMap;
+use moka::sync::Cache as MokaCache;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
+use std::sync::Arc;
 
 use crate::config::settings::Settings;
 use crate::core::engine::rules::COMPILED_RULES;
+use crate::core::engine::threat_signals::{self, ThreatSignals};
+#[cfg(feature = "advanced-rules")]
+use crate::core::rules::{RuleEngine, WafRequest};
 use crate::data::storage::manager::get_db;
 use crate::services::llm::client::llm_call;
 use crate::utils::http_utils::is_static_resource;
@@ -20,12 +24,44 @@ static JSON_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
 static JSON_OBJECT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{.*?\}").expect("JSON object regex pattern is a safe literal"));
 
+static MULTIPART_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)(filename="[^"]*".*?\r?\n\r?\n)([\s\S]{64})([\s\S]+?)(?=\r?\n--|$)"#)
+        .expect("multipart form-data regex pattern is a safe literal")
+});
+
+static REPEAT_CHAR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(.)\1{64,}")
+        .expect("repeated char regex pattern is a safe literal")
+});
+
+/// URL 前缀白名单：匹配这些前缀的请求直接放行，不进入检测流程
+const URL_PREFIX_WHITELIST: &[&str] = &[
+    "/static/",
+    "/api/health",
+    "/.well-known/",
+    "/favicon.ico",
+    "/robots.txt",
+];
+
+/// 检查 URL 是否匹配前缀白名单
+#[inline]
+fn is_url_prefix_whitelisted(url: &str) -> bool {
+    URL_PREFIX_WHITELIST.iter().any(|prefix| url.starts_with(prefix))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectionResult {
     #[serde(rename = "type")]
     pub detection_type: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub attack_types: Vec<String>,
+    pub matched_rule_id: Option<u64>,
+    pub matched_rule_category: Option<String>,
+    pub behavior_score: Option<f64>,
+    pub reputation_score: Option<f64>,
+    pub llm_tier_used: Option<u8>,
+    pub llm_verdict: Option<String>,
+    pub detection_type_enum: Option<String>,
 }
 
 impl DetectionResult {
@@ -33,6 +69,13 @@ impl DetectionResult {
         DetectionResult {
             detection_type: "normal".to_string(),
             attack_types: vec![],
+            matched_rule_id: None,
+            matched_rule_category: None,
+            behavior_score: None,
+            reputation_score: None,
+            llm_tier_used: None,
+            llm_verdict: None,
+            detection_type_enum: Some("normal".to_string()),
         }
     }
 
@@ -40,65 +83,161 @@ impl DetectionResult {
         DetectionResult {
             detection_type: "hacker".to_string(),
             attack_types,
+            matched_rule_id: None,
+            matched_rule_category: None,
+            behavior_score: None,
+            reputation_score: None,
+            llm_tier_used: None,
+            llm_verdict: None,
+            detection_type_enum: Some("rule_match".to_string()),
         }
     }
 
-    #[allow(dead_code)]
+    pub fn from_rule_match(rule_id: u64, category: String, attack_types: Vec<String>) -> Self {
+        DetectionResult {
+            detection_type: "hacker".to_string(),
+            attack_types,
+            matched_rule_id: Some(rule_id),
+            matched_rule_category: Some(category),
+            behavior_score: None,
+            reputation_score: None,
+            llm_tier_used: None,
+            llm_verdict: None,
+            detection_type_enum: Some("rule_match".to_string()),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_llm(result: DetectionResult, tier: u8, verdict: String) -> Self {
+        DetectionResult {
+            llm_tier_used: Some(tier),
+            llm_verdict: Some(verdict),
+            detection_type_enum: Some("zero_day_suspected".to_string()),
+            ..result
+        }
+    }
+
+    pub fn from_threat_signals(
+        attack_types: Vec<String>,
+        signals: &ThreatSignals,
+        tier: u8,
+        verdict: String,
+    ) -> Self {
+        DetectionResult {
+            detection_type: "hacker".to_string(),
+            attack_types,
+            matched_rule_id: None,
+            matched_rule_category: None,
+            behavior_score: Some(signals.behavior_score),
+            reputation_score: Some(signals.reputation_score),
+            llm_tier_used: Some(tier),
+            llm_verdict: Some(verdict),
+            detection_type_enum: Some("zero_day_suspected".to_string()),
+        }
+    }
+
+    #[cfg(feature = "llm-detection")]
     pub fn error() -> Self {
         DetectionResult {
             detection_type: "error".to_string(),
             attack_types: vec![],
+            matched_rule_id: None,
+            matched_rule_category: None,
+            behavior_score: None,
+            reputation_score: None,
+            llm_tier_used: None,
+            llm_verdict: None,
+            detection_type_enum: None,
         }
     }
 }
 
-struct CacheEntry {
-    timestamp: std::time::Instant,
-    data: DetectionResult,
-}
-
+#[derive(Clone)]
 struct HostCompiledRules {
     hash: String,
-    compiled: HashMap<String, Regex>,
+    compiled: Arc<HashMap<String, Regex>>,
 }
 
-static DETECTION_CACHE: once_cell::sync::Lazy<DashMap<String, CacheEntry>> =
-    once_cell::sync::Lazy::new(DashMap::new);
+static DETECTION_CACHE: once_cell::sync::Lazy<MokaCache<String, DetectionResult>> =
+    once_cell::sync::Lazy::new(|| {
+        MokaCache::builder()
+            .max_capacity(100_000)
+            .time_to_live(std::time::Duration::from_secs(60))
+            .build()
+    });
 
-static HOST_COMPILED_RULES: once_cell::sync::Lazy<DashMap<String, HostCompiledRules>> =
-    once_cell::sync::Lazy::new(DashMap::new);
+/// LLM 语义缓存：按内容哈希去重，避免相同内容重复调用 LLM
+static LLM_SEMANTIC_CACHE: once_cell::sync::Lazy<MokaCache<u64, String>> =
+    once_cell::sync::Lazy::new(|| {
+        MokaCache::builder()
+            .max_capacity(100_000)
+            .time_to_live(std::time::Duration::from_secs(300)) // TTL 5 分钟
+            .build()
+    });
 
-static HOST_RULE_HASH_CACHE: once_cell::sync::Lazy<DashMap<String, String>> =
-    once_cell::sync::Lazy::new(DashMap::new);
+/// 计算 LLM 语义缓存 key：基于 URL、body、UA、method、headers 指纹
+fn compute_llm_cache_key(url: &str, body: &[u8], ua: &str, method: &str, headers_fingerprint: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = ahash::AHasher::default();
+    url.hash(&mut hasher);
+    body.hash(&mut hasher);
+    ua.hash(&mut hasher);
+    method.hash(&mut hasher);
+    headers_fingerprint.hash(&mut hasher);
+    hasher.finish()
+}
 
-/// 缓存统计信息结构体，用于跟踪 WAF 规则缓存的命中和未命中情况
-///
-/// 该结构体记录两种缓存的统计信息：
-/// 1. 规则哈希缓存（HOST_RULE_HASH_CACHE）：存储主机规则的哈希值
-/// 2. 编译规则缓存（HOST_COMPILED_RULES）：存储已编译的正则表达式规则
+/// 计算 headers 指纹（仅核心字段，与 LLM 输入截断保持一致）
+fn compute_headers_fingerprint(headers: &HashMap<String, String>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = ahash::AHasher::default();
+    let core_keys = ["user-agent", "referer", "content-type", "x-forwarded-for"];
+    for key in &core_keys {
+        if let Some(v) = headers.get(*key).or_else(|| headers.get(&key.to_lowercase())) {
+            key.hash(&mut hasher);
+            v.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+static HOST_COMPILED_RULES: once_cell::sync::Lazy<MokaCache<String, HostCompiledRules>> =
+    once_cell::sync::Lazy::new(|| {
+        MokaCache::builder()
+            .max_capacity(10_000)
+            .time_to_idle(std::time::Duration::from_secs(3600))
+            .build()
+    });
+
+#[cfg(feature = "advanced-rules")]
+static GLOBAL_RULE_ENGINE: once_cell::sync::Lazy<Option<Arc<RuleEngine>>> =
+    once_cell::sync::Lazy::new(|| None);
+
+#[cfg(feature = "advanced-rules")]
+pub fn set_global_rule_engine(engine: Arc<RuleEngine>) {
+    static ENGINE_REF: once_cell::sync::Lazy<parking_lot::Mutex<Option<Arc<RuleEngine>>>> =
+        once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
+
+    *ENGINE_REF.lock() = Some(engine);
+}
+
+#[cfg(feature = "advanced-rules")]
+fn get_global_rule_engine() -> Option<Arc<RuleEngine>> {
+    static ENGINE_REF: once_cell::sync::Lazy<parking_lot::Mutex<Option<Arc<RuleEngine>>>> =
+        once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
+
+    ENGINE_REF.lock().clone()
+}
+
 struct CacheStats {
-    /// 规则哈希缓存命中次数
-    /// 当请求的规则哈希值已在缓存中时计数
-    hash_cache_hits: AtomicU64,
-    /// 规则哈希缓存未命中次数
-    /// 当请求的规则哈希值不在缓存中，需要重新计算时计数
-    hash_cache_misses: AtomicU64,
-    /// 编译规则缓存命中次数
-    /// 当已编译的正则表达式规则可直接从缓存获取时计数
     compiled_cache_hits: AtomicU64,
-    /// 编译规则缓存未命中次数
-    /// 当需要重新编译正则表达式规则时计数
     compiled_cache_misses: AtomicU64,
 }
 
 static CACHE_STATS: LazyLock<CacheStats> = LazyLock::new(|| CacheStats {
-    hash_cache_hits: AtomicU64::new(0),
-    hash_cache_misses: AtomicU64::new(0),
     compiled_cache_hits: AtomicU64::new(0),
     compiled_cache_misses: AtomicU64::new(0),
 });
-
-const MAX_CACHE_SIZE: usize = 10000;
 
 const LLM_SYSTEM_INSTRUCTION: &str = r#"You are an HTTP security analysis engine. Your job: distinguish real attacks from normal user behavior.
 
@@ -141,7 +280,7 @@ Output a single JSON object. No explanation, no newlines, no extra characters.
 - `{"type":"normal"}`
 - `{"type":"hacker","attack_types":["sql_injection","scanner"]}`
 
-attack_types: xss, sql_injection, path_traversal, rce, ssrf, csrf, xxe, ssti, command_injection, scanner, account_takeover"#;
+attack_types: xss, sql_injection, path_traversal, rce, ssrf, csrf, xxe, ssti, command_injection, scanner, account_takeover, cc_attack"#;
 
 const LLM_USER_PROMPT_TEMPLATE: &str = r#"## Current Request
 - URL: {url}
@@ -153,29 +292,7 @@ const LLM_USER_PROMPT_TEMPLATE: &str = r#"## Current Request
 
 Analyze the above request and return ONLY a JSON object as specified in your instructions."#;
 
-pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
-    if let Some(cached_hash_entry) = HOST_RULE_HASH_CACHE.get(host) {
-        CACHE_STATS.hash_cache_hits.fetch_add(1, Ordering::Relaxed);
-        let cached_hash = cached_hash_entry.value().clone();
-
-        if let Some(host_cache) = HOST_COMPILED_RULES.get(host) {
-            if host_cache.hash == cached_hash {
-                CACHE_STATS
-                    .compiled_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-                return host_cache.compiled.clone();
-            }
-        }
-
-        CACHE_STATS
-            .compiled_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
-    } else {
-        CACHE_STATS
-            .hash_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
+pub fn get_host_rules(host: &str) -> Arc<HashMap<String, Regex>> {
     let db = get_db(host);
     let security = db.ram_get("security").unwrap_or(serde_json::json!({}));
     let waf_rules = security
@@ -185,8 +302,7 @@ pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
 
     let rule_hash = compute_rule_hash(&waf_rules);
 
-    HOST_RULE_HASH_CACHE.insert(host.to_string(), rule_hash.clone());
-
+    // Fast path: check cache with hash verification
     if let Some(host_cache) = HOST_COMPILED_RULES.get(host) {
         if host_cache.hash == rule_hash {
             CACHE_STATS
@@ -194,12 +310,16 @@ pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
                 .fetch_add(1, Ordering::Relaxed);
             return host_cache.compiled.clone();
         }
+        CACHE_STATS
+            .compiled_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    } else {
+        CACHE_STATS
+            .compiled_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
     }
 
-    CACHE_STATS
-        .compiled_cache_misses
-        .fetch_add(1, Ordering::Relaxed);
-
+    // Slow path: compile rules
     let mut compiled = HashMap::new();
     if let Some(obj) = waf_rules.as_object() {
         for (attack_type, patterns) in obj {
@@ -229,42 +349,35 @@ pub fn get_host_rules(host: &str) -> HashMap<String, Regex> {
         }
     }
 
+    let compiled_arc = Arc::new(compiled);
+
     HOST_COMPILED_RULES.insert(
         host.to_string(),
         HostCompiledRules {
-            hash: rule_hash.clone(),
-            compiled: compiled.clone(),
+            hash: rule_hash,
+            compiled: compiled_arc.clone(),
         },
     );
 
-    compiled
+    compiled_arc
 }
 
 fn compute_rule_hash(rules: &Value) -> String {
     use std::hash::{Hash, Hasher};
     let serialized = serde_json::to_string(rules).unwrap_or_default();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = ahash::AHasher::default();
     serialized.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 
 pub fn invalidate_all_rules_cache() -> Result<(), String> {
-    HOST_RULE_HASH_CACHE.clear();
-    HOST_COMPILED_RULES.clear();
+    HOST_COMPILED_RULES.invalidate_all();
     tracing::info!("All WAF rules cache invalidated");
     Ok(())
 }
 
 pub fn get_cache_stats() -> HashMap<String, u64> {
     let mut stats = HashMap::new();
-    stats.insert(
-        "hash_cache_hits".to_string(),
-        CACHE_STATS.hash_cache_hits.load(Ordering::Relaxed),
-    );
-    stats.insert(
-        "hash_cache_misses".to_string(),
-        CACHE_STATS.hash_cache_misses.load(Ordering::Relaxed),
-    );
     stats.insert(
         "compiled_cache_hits".to_string(),
         CACHE_STATS.compiled_cache_hits.load(Ordering::Relaxed),
@@ -310,27 +423,70 @@ pub fn initialize_waf_cache_background(hosts: Vec<String>) {
     });
 }
 
+/// 对单个正则按字段优先级逐字段匹配，命中即返回 true。
+/// 优先级：URL > body > header values > cookie values
+/// 消除了每次请求的 target 字符串拼接分配。
+#[inline]
+fn matches_any_field(
+    pattern: &Regex,
+    url: &str,
+    data: &str,
+    headers: &HashMap<String, String>,
+    cookies: &HashMap<String, String>,
+) -> bool {
+    // URL 匹配（命中概率最高，优先检查）
+    if pattern.is_match(url) {
+        return true;
+    }
+    // Body 匹配
+    if !data.is_empty() && pattern.is_match(data) {
+        return true;
+    }
+    // Header values 匹配
+    for v in headers.values() {
+        if pattern.is_match(v) {
+            return true;
+        }
+    }
+    // Cookie values 匹配
+    for v in cookies.values() {
+        if pattern.is_match(v) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 对请求各字段分别进行正则匹配，而非拼接成单一 target 字符串。
+/// 按字段优先级（URL > body > headers > cookies）逐规则检查，
+/// 消除了每次请求的 String 分配开销。
 pub fn check_rules(
     url: &str,
-    headers: &str,
-    cookies: &str,
+    headers: &HashMap<String, String>,
+    cookies: &HashMap<String, String>,
     data: &str,
-    host_rules: Option<&HashMap<String, Regex>>,
+    host_rules: Option<&Arc<HashMap<String, Regex>>>,
+    early_exit: bool,
 ) -> (bool, Vec<String>) {
-    let target = format!("{} {} {} {}", url, headers, cookies, data).to_lowercase();
     let mut matched = Vec::new();
     match host_rules {
         Some(rules) => {
             for (attack_type, pattern) in rules.iter() {
-                if pattern.is_match(&target) {
+                if matches_any_field(pattern, url, data, headers, cookies) {
                     matched.push(attack_type.clone());
+                    if early_exit {
+                        return (true, matched);
+                    }
                 }
             }
         }
         None => {
             for (attack_type, pattern) in COMPILED_RULES.iter() {
-                if pattern.is_match(&target) {
+                if matches_any_field(pattern, url, data, headers, cookies) {
                     matched.push(attack_type.to_string());
+                    if early_exit {
+                        return (true, matched);
+                    }
                 }
             }
         }
@@ -338,9 +494,10 @@ pub fn check_rules(
     (!matched.is_empty(), matched)
 }
 
-pub fn cache_key(url: &str, data: &str) -> String {
+pub fn cache_key(url: &str, method: &str, data: &str) -> String {
     use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = ahash::AHasher::default();
+    method.hash(&mut hasher);
     url.hash(&mut hasher);
     data.hash(&mut hasher);
     format!("waf:{:016x}", hasher.finish())
@@ -357,6 +514,11 @@ pub async fn detect_request(
     host: &str,
 ) -> DetectionResult {
     if is_static_resource(url, &settings.static_extensions) {
+        return DetectionResult::normal();
+    }
+
+    // URL 前缀白名单：直接放行，不进入检测流程
+    if is_url_prefix_whitelisted(url) {
         return DetectionResult::normal();
     }
 
@@ -385,18 +547,65 @@ pub async fn detect_request(
 
     let parsed_body = parse_body(body, &content_type);
 
+    #[cfg(feature = "advanced-rules")]
+    if let Some(rule_engine) = get_global_rule_engine() {
+        let waf_req = WafRequest {
+            url: url.to_string(),
+            method: method.to_string(),
+            headers: headers.clone(),
+            query_params: args.clone(),
+            body: parsed_body.clone(),
+            cookies: cookies.clone(),
+        };
+
+        let rule_matches = rule_engine.match_request(&waf_req);
+        if !rule_matches.is_empty() {
+            let first_match = &rule_matches[0];
+            let attack_types: Vec<String> = rule_matches
+                .iter()
+                .map(|m| m.rule.category.as_str().to_string())
+                .collect();
+
+            tracing::info!(
+                rule_id = first_match.rule.id,
+                category = first_match.rule.category.as_str(),
+                "Rule match detected"
+            );
+
+            return DetectionResult::from_rule_match(
+                first_match.rule.id,
+                first_match.rule.category.as_str().to_string(),
+                attack_types,
+            );
+        }
+    }
+
     let host_rules = get_host_rules(host);
 
     let (is_malicious, attack_types) = check_rules(
         url,
-        &serde_json::to_string(headers).unwrap_or_default(),
-        &serde_json::to_string(cookies).unwrap_or_default(),
+        headers,
+        cookies,
         &parsed_body,
         Some(&host_rules),
+        true,
     );
 
     if is_malicious {
         return DetectionResult::hacker(attack_types);
+    }
+
+    // 前置拦截：behavior_score ≥ 80 直接判定为 hacker，不进入 LLM
+    let reputation_score = extract_reputation_score(headers);
+    let behavior_score = threat_signals::compute_behavior_score_only(headers, &parsed_body);
+
+    if behavior_score >= 80.0 {
+        return DetectionResult::hacker(vec!["high_behavior_score".to_string()]);
+    }
+
+    // 前置拦截：reputation_score ≥ 90 直接判定为 hacker，不进入 LLM
+    if reputation_score >= 90.0 {
+        return DetectionResult::hacker(vec!["high_reputation_score".to_string()]);
     }
 
     let data_combined = format!(
@@ -404,85 +613,148 @@ pub async fn detect_request(
         parsed_body,
         serde_json::to_string(args).unwrap_or_default()
     );
-    let key = cache_key(url, &data_combined);
+    let key = cache_key(url, method, &data_combined);
 
-    if let Some(entry) = DETECTION_CACHE.get(&key) {
-        if entry.timestamp.elapsed().as_secs() < settings.cache_ttl as u64 {
-            return entry.data.clone();
-        }
+    if let Some(cached_result) = DETECTION_CACHE.get(&key) {
+        return cached_result;
     }
 
     if settings.api_key.is_empty() {
         return DetectionResult::normal();
     }
 
-    let history = build_history(host, headers);
+    let ip_history = build_ip_history(host, headers);
 
-    let escaped_url = html_escape_for_prompt(url);
-    let escaped_headers =
-        html_escape_for_prompt(&serde_json::to_string(headers).unwrap_or_default());
-    let escaped_cookies =
-        html_escape_for_prompt(&serde_json::to_string(cookies).unwrap_or_default());
-    let escaped_data = html_escape_for_prompt(&data_combined);
-    let escaped_history = html_escape_for_prompt(&history);
-
-    let prompt = LLM_USER_PROMPT_TEMPLATE
-        .replace("{url}", &optimize_for_llm(&escaped_url, 1024))
-        .replace("{method}", method)
-        .replace("{headers}", &optimize_for_llm(&escaped_headers, 2048))
-        .replace("{cookies}", &optimize_for_llm(&escaped_cookies, 1024))
-        .replace("{data}", &optimize_for_llm(&escaped_data, 8192))
-        .replace("{history}", &escaped_history);
-
-    let full_prompt = format!("{}\n\n{}", LLM_SYSTEM_INSTRUCTION, prompt);
-
-    let raw_result = llm_call(&full_prompt, false, None, settings).await;
-
-    let result = match extract_json(&raw_result) {
-        Some(v) => v,
-        None => {
-            tracing::error!(
-                "LLM detection failed for {} (Invalid LLM response format)",
-                url
-            );
-            return DetectionResult::normal();
-        }
-    };
-
-    let detection = match serde_json::from_value::<DetectionResult>(result) {
-        Ok(d) => d,
-        Err(_) => {
-            tracing::error!(
-                "LLM detection failed for {} (Invalid LLM response format)",
-                url
-            );
-            return DetectionResult::normal();
-        }
-    };
-
-    if DETECTION_CACHE.len() >= MAX_CACHE_SIZE {
-        let keys: Vec<String> = DETECTION_CACHE
-            .iter()
-            .take(1000)
-            .map(|e| e.key().clone())
-            .collect();
-        for k in keys {
-            DETECTION_CACHE.remove(&k);
-        }
-    }
-
-    DETECTION_CACHE.insert(
-        key,
-        CacheEntry {
-            timestamp: std::time::Instant::now(),
-            data: detection.clone(),
-        },
+    let signals = threat_signals::compute_threat_signals(
+        &parsed_body,
+        reputation_score,
+        &ip_history,
+        headers,
     );
 
-    detection
+    if signals.has_any_signal() {
+        // LLM 语义缓存：查询是否已有相同内容的 LLM 判定结果
+        let ua = headers.get("user-agent").map(|v| v.as_str()).unwrap_or("");
+        let headers_fp = compute_headers_fingerprint(headers);
+        let llm_cache_key = compute_llm_cache_key(url, body, ua, method, headers_fp);
+
+        if let Some(cached_verdict) = LLM_SEMANTIC_CACHE.get(&llm_cache_key) {
+            tracing::debug!("LLM semantic cache hit for {}", url);
+            let detection = match serde_json::from_str::<DetectionResult>(&cached_verdict) {
+                Ok(d) => d,
+                Err(_) => {
+                    LLM_SEMANTIC_CACHE.invalidate(&llm_cache_key);
+                    DetectionResult::normal()
+                }
+            };
+            let enhanced_result = DetectionResult::from_threat_signals(
+                detection.attack_types,
+                &signals,
+                1,
+                detection.detection_type.clone(),
+            );
+            DETECTION_CACHE.insert(key, enhanced_result.clone());
+            return enhanced_result;
+        }
+
+        let history = build_history(host, headers);
+
+        // LLM 输入截断：减少 token 消耗
+        let truncated_headers = truncate_headers_for_llm(headers);
+        let truncated_cookies = truncate_cookies_for_llm(cookies);
+        let truncated_body = truncate_body_for_llm(&data_combined);
+
+        let escaped_url = html_escape_for_prompt(url);
+        let escaped_headers =
+            html_escape_for_prompt(&serde_json::to_string(&truncated_headers).unwrap_or_default());
+        let escaped_cookies =
+            html_escape_for_prompt(&serde_json::to_string(&truncated_cookies).unwrap_or_default());
+        let escaped_data = html_escape_for_prompt(truncated_body);
+        let escaped_history = html_escape_for_prompt(&history);
+
+        let prompt = LLM_USER_PROMPT_TEMPLATE
+            .replace("{url}", &optimize_for_llm(&escaped_url, 256))
+            .replace("{method}", method)
+            .replace("{headers}", &optimize_for_llm(&escaped_headers, 256))
+            .replace("{cookies}", &optimize_for_llm(&escaped_cookies, 128))
+            .replace("{data}", &optimize_for_llm(&escaped_data, 512))
+            .replace("{history}", &escaped_history);
+
+        let full_prompt = format!("{}\n\n{}", LLM_SYSTEM_INSTRUCTION, prompt);
+
+        let llm_timeout = std::time::Duration::from_secs(settings.llm_timeout_secs);
+        let llm_on_error = || -> DetectionResult {
+            if settings.llm_fail_open {
+                DetectionResult::normal()
+            } else {
+                DetectionResult::hacker(vec!["llm_detection_failed".to_string()])
+            }
+        };
+
+        let raw_result = match tokio::time::timeout(llm_timeout, llm_call(&full_prompt, false, None, settings)).await {
+            Ok(s) => s,
+            Err(_) => {
+                tracing::error!(
+                    "LLM detection timed out for {} after {}s",
+                    url,
+                    settings.llm_timeout_secs
+                );
+                return llm_on_error();
+            }
+        };
+
+        let result = match extract_json(&raw_result) {
+            Some(v) => v,
+            None => {
+                tracing::error!(
+                    "LLM detection failed for {} (Invalid LLM response format)",
+                    url
+                );
+                return llm_on_error();
+            }
+        };
+
+        let detection = match serde_json::from_value::<DetectionResult>(result) {
+            Ok(d) => d,
+            Err(_) => {
+                tracing::error!(
+                    "LLM detection failed for {} (Invalid LLM response format)",
+                    url
+                );
+                return llm_on_error();
+            }
+        };
+
+        let llm_verdict = detection.detection_type.clone();
+        let attack_types = detection.attack_types.clone();
+        let enhanced_result = DetectionResult::from_threat_signals(
+            attack_types,
+            &signals,
+            1,
+            llm_verdict.clone(),
+        );
+
+        // 写入 LLM 语义缓存
+        if let Ok(serialized) = serde_json::to_string(&detection) {
+            LLM_SEMANTIC_CACHE.insert(llm_cache_key, serialized);
+        }
+
+        DETECTION_CACHE.insert(key, enhanced_result.clone());
+
+        return enhanced_result;
+    }
+
+    DetectionResult::normal()
 }
 
-fn build_history(host: &str, headers: &HashMap<String, String>) -> String {
+fn extract_reputation_score(headers: &HashMap<String, String>) -> f64 {
+    headers
+        .get("x-ip-reputation-score")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+fn get_client_log_entries(host: &str, headers: &HashMap<String, String>) -> Vec<serde_json::Value> {
     let db = get_db(host);
     let client_ip = headers
         .get("x-real-ip")
@@ -493,40 +765,68 @@ fn build_history(host: &str, headers: &HashMap<String, String>) -> String {
 
     let log_db = match db.get_log_db() {
         Some(ldb) => ldb,
-        None => return String::new(),
+        None => return vec![],
     };
 
     let logs = match log_db.get("logs") {
         Some(v) => match v.as_array() {
             Some(arr) => arr.clone(),
-            None => return String::new(),
+            None => return vec![],
         },
-        None => return String::new(),
+        None => return vec![],
     };
+
+    logs.iter()
+        .rev()
+        .filter(|entry| {
+            let entry_ip = entry.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+            let entry_cdn_ip = entry.get("cdn_ip").and_then(|v| v.as_str()).unwrap_or("");
+            entry_ip == client_ip || entry_cdn_ip == client_ip
+        })
+        .cloned()
+        .collect()
+}
+
+fn build_ip_history(host: &str, headers: &HashMap<String, String>) -> Vec<threat_signals::RequestRecord> {
+    let entries = get_client_log_entries(host, headers);
+
+    entries.iter().take(10).map(|entry| {
+        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let status_code = entry
+            .get("status")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(200) as u16;
+        let is_suspicious = entry
+            .get("is_suspicious")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        threat_signals::RequestRecord {
+            url,
+            status_code,
+            is_suspicious,
+        }
+    }).collect()
+}
+
+fn build_history(host: &str, headers: &HashMap<String, String>) -> String {
+    let entries = get_client_log_entries(host, headers);
 
     let mut history = String::new();
     let mut counter = 0;
 
-    for entry in logs.iter().rev() {
-        if counter >= 5 {
-            break;
-        }
-        let entry_ip = entry.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let entry_cdn_ip = entry.get("cdn_ip").and_then(|v| v.as_str()).unwrap_or("");
-
-        if entry_ip == client_ip || entry_cdn_ip == client_ip {
-            counter += 1;
-            let time = entry.get("time").and_then(|v| v.as_str()).unwrap_or("");
-            let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("");
-            let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            let entry_headers = entry
-                .get("headers")
-                .cloned()
-                .unwrap_or(serde_json::json!({}));
-            let status = entry.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
-            let stuff = serde_json::json!([time, method, url, entry_headers, status]);
-            history.push_str(&format!("{}. {}\n", counter, stuff));
-        }
+    for entry in entries.iter().take(5) {
+        counter += 1;
+        let time = entry.get("time").and_then(|v| v.as_str()).unwrap_or("");
+        let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let entry_headers = entry
+            .get("headers")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        let status = entry.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+        let stuff = serde_json::json!([time, method, url, entry_headers, status]);
+        history.push_str(&format!("{}. {}\n", counter, stuff));
     }
 
     if history.is_empty() {
@@ -555,13 +855,8 @@ fn parse_body(body: &[u8], content_type: &str) -> String {
         String::from_utf8_lossy(safe_body).to_string()
     } else if content_type.contains("multipart/form-data") {
         let raw_str = String::from_utf8_lossy(safe_body).to_string();
-        let re = Regex::new(
-            r#"(?i)(filename="[^"]*".*?\r?\n\r?\n)([\s\S]{64})([\s\S]+?)(?=\r?\n--|$)"#,
-        )
-        .expect(
-            "multipart form-data regex pattern is a safe literal and will never fail at runtime",
-        );
-        re.replace_all(&raw_str, "${1}${2}\n...<Binary File Truncated>\n")
+        MULTIPART_RE
+            .replace_all(&raw_str, "${1}${2}\n...<Binary File Truncated>\n")
             .to_string()
     } else {
         String::from_utf8_lossy(safe_body).to_string()
@@ -577,9 +872,7 @@ fn html_escape_for_prompt(s: &str) -> String {
 }
 
 fn optimize_for_llm(s: &str, limit: usize) -> String {
-    let re = regex::Regex::new(r"(.)\1{64,}")
-        .expect("repeated char regex pattern is a safe literal and will never fail at runtime");
-    let compressed = re
+    let compressed = REPEAT_CHAR_RE
         .replace_all(s, "${1}${1}${1}...<Repeated Padding Removed>")
         .to_string();
 
@@ -587,6 +880,33 @@ fn optimize_for_llm(s: &str, limit: usize) -> String {
         compressed
     } else {
         format!("{}...<Hard Truncated>", &compressed[..limit])
+    }
+}
+
+/// LLM 输入截断：只保留核心 headers（user-agent / referer / content-type / x-forwarded-for）
+fn truncate_headers_for_llm(headers: &HashMap<String, String>) -> HashMap<String, String> {
+    const CORE_KEYS: &[&str] = &["user-agent", "referer", "content-type", "x-forwarded-for"];
+    let mut result = HashMap::with_capacity(CORE_KEYS.len());
+    for key in CORE_KEYS {
+        if let Some(v) = headers.get(*key).or_else(|| headers.get(&key.to_lowercase())) {
+            result.insert(key.to_string(), v.clone());
+        }
+    }
+    result
+}
+
+/// LLM 输入截断：只保留前 5 个 cookies
+fn truncate_cookies_for_llm(cookies: &HashMap<String, String>) -> HashMap<String, String> {
+    cookies.iter().take(5).map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// LLM 输入截断：body 超过 2KB 截断
+fn truncate_body_for_llm(body: &str) -> &str {
+    const MAX_BODY_LEN: usize = 2048;
+    if body.len() <= MAX_BODY_LEN {
+        body
+    } else {
+        &body[..MAX_BODY_LEN]
     }
 }
 
@@ -616,11 +936,115 @@ fn extract_json(text: &str) -> Option<Value> {
     None
 }
 
-pub fn start_cache_gc_worker(cache_ttl: u64, gc_interval: u64) {
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(gc_interval));
-            DETECTION_CACHE.retain(|_, v| v.timestamp.elapsed().as_secs() < cache_ttl);
+pub fn quick_detect_request(
+    url: &str,
+    method: &str,
+    headers: &HashMap<String, String>,
+    cookies: &HashMap<String, String>,
+    body: &[u8],
+    args: &HashMap<String, String>,
+    settings: &Settings,
+    host: &str,
+) -> DetectionResult {
+    if is_static_resource(url, &settings.static_extensions) {
+        return DetectionResult::normal();
+    }
+
+    // URL 前缀白名单：直接放行，不进入检测流程
+    if is_url_prefix_whitelisted(url) {
+        return DetectionResult::normal();
+    }
+
+    if url.len() > 2000 {
+        return DetectionResult::hacker(vec!["buffer_overflow".to_string()]);
+    }
+
+    let headers_size: usize = headers.iter().map(|(k, v)| k.len() + v.len()).sum();
+    if headers_size > 4096 {
+        return DetectionResult::hacker(vec!["buffer_overflow".to_string()]);
+    }
+
+    let cookies_size: usize = cookies.iter().map(|(k, v)| k.len() + v.len()).sum();
+    if cookies_size > 4096 {
+        return DetectionResult::hacker(vec!["buffer_overflow".to_string()]);
+    }
+
+    let content_type = headers
+        .get("content-type")
+        .map(|v| v.to_lowercase())
+        .unwrap_or_default();
+
+    if !content_type.contains("multipart/form-data") && body.len() > 131072 {
+        return DetectionResult::hacker(vec!["buffer_overflow".to_string()]);
+    }
+
+    let parsed_body = parse_body(body, &content_type);
+
+    #[cfg(feature = "advanced-rules")]
+    if let Some(rule_engine) = get_global_rule_engine() {
+        let waf_req = WafRequest {
+            url: url.to_string(),
+            method: method.to_string(),
+            headers: headers.clone(),
+            query_params: args.clone(),
+            body: parsed_body.clone(),
+            cookies: cookies.clone(),
+        };
+
+        let rule_matches = rule_engine.match_request(&waf_req);
+        if !rule_matches.is_empty() {
+            let first_match = &rule_matches[0];
+            let attack_types: Vec<String> = rule_matches
+                .iter()
+                .map(|m| m.rule.category.as_str().to_string())
+                .collect();
+
+            return DetectionResult::from_rule_match(
+                first_match.rule.id,
+                first_match.rule.category.as_str().to_string(),
+                attack_types,
+            );
         }
-    });
+    }
+
+    let host_rules = get_host_rules(host);
+
+    let (is_malicious, attack_types) = check_rules(
+        url,
+        headers,
+        cookies,
+        &parsed_body,
+        Some(&host_rules),
+        true,
+    );
+
+    if is_malicious {
+        return DetectionResult::hacker(attack_types);
+    }
+
+    // 前置拦截：behavior_score ≥ 80 直接判定为 hacker，不进入 LLM
+    let reputation_score = extract_reputation_score(headers);
+    let behavior_score = threat_signals::compute_behavior_score_only(headers, &parsed_body);
+
+    if behavior_score >= 80.0 {
+        return DetectionResult::hacker(vec!["high_behavior_score".to_string()]);
+    }
+
+    // 前置拦截：reputation_score ≥ 90 直接判定为 hacker，不进入 LLM
+    if reputation_score >= 90.0 {
+        return DetectionResult::hacker(vec!["high_reputation_score".to_string()]);
+    }
+
+    let data_combined = format!(
+        "{}|{}",
+        parsed_body,
+        serde_json::to_string(args).unwrap_or_default()
+    );
+    let key = cache_key(url, method, &data_combined);
+
+    if let Some(cached_result) = DETECTION_CACHE.get(&key) {
+        return cached_result;
+    }
+
+    DetectionResult::normal()
 }

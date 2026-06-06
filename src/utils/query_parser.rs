@@ -38,7 +38,6 @@ pub enum FieldOp {
     Eq,
     Fuzzy,
     In,
-    #[allow(dead_code)]
     Range,
 }
 
@@ -46,7 +45,6 @@ pub enum FieldOp {
 pub enum FieldValue {
     Str(String),
     List(Vec<String>),
-    #[allow(dead_code)]
     Range(String, String),
 }
 

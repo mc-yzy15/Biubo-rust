@@ -5,11 +5,11 @@ First off, thank you for considering contributing to Biubo WAF! It's people like
 ## 🌈 How Can I Contribute?
 
 ### 🛡️ I'm a Security Researcher
--   **New Rules**: Found a bypass? Or a new CVE? Update `src/core/engine/rules.py` with more robust regex patterns.
+-   **New Rules**: Found a bypass? Or a new CVE? Update `src/core/engine/rules.rs` with more robust regex patterns.
 -   **Bypass Testing**: Try to bypass the WAF and report your findings (or better yet, give us the fix!).
 -   **Security Hardening**: Audit our dashboard and API for vulnerabilities.
 
-### 🐍 I'm a Python Developer
+### 🦀 I'm a Rust Developer
 -   **Async Refactoring**: The LLM call is currently blocking. We'd love to see a non-blocking/queue implementation.
 -   **Core Optimizations**: Help us optimize the Proxy performance.
 -   **Database Drivers**: Add support for Redis or Postgres backends.
@@ -22,11 +22,11 @@ First off, thank you for considering contributing to Biubo WAF! It's people like
 ## 🚀 Getting Started
 
 1.  **Fork** the repository.
-2.  **Clone** your fork: `git clone https://github.com/your-username/Biubo_WAF.git`
+2.  **Clone** your fork: `git clone https://github.com/your-username/Biubo-rust.git`
 3.  **Branch**: `git checkout -b feature/cool-new-feature`
 4.  **Dev Environment**: Follow the [DEVELOPER.md](DEVELOPER.md) to set up your environment.
 5.  **Commit**: Make sure your commit messages are descriptive.
-6.  **Pull Request**: Open a PR against the `main` branch.
+6.  **Pull Request**: Open a PR against the `master` branch.
 
 ## 📮 Community
 

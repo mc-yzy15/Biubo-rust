@@ -1,5 +1,18 @@
+use crate::api::middleware::api_key_auth::api_key_auth_middleware;
+use crate::api::middleware::cluster_auth::cluster_api_auth_middleware;
+use crate::api::middleware::dashboard_auth::dashboard_auth_middleware;
+use crate::api::middleware::internal_auth::internal_api_auth_middleware;
 use crate::api::routes;
+use crate::api::routes::waf_events::EventBroadcaster;
+#[cfg(feature = "cluster-mode")]
+use crate::cluster::sync::ConfigSync;
+#[cfg(feature = "cluster-mode")]
+use crate::cluster::threat_share::ThreatIntelligenceShare;
 use crate::config::settings::{Settings, SharedSettings};
+use crate::core::engine::async_detection_queue::AsyncDetectionQueue;
+use crate::core::reputation::aggregator::ReputationAggregator;
+use crate::core::reputation::manager::ReputationManager;
+use axum::middleware::from_fn;
 use axum::Router;
 use std::collections::HashMap;
 use std::fs;
@@ -13,15 +26,51 @@ pub type ErrorPages = HashMap<String, String>;
 pub struct AppState {
     pub settings: SharedSettings,
     pub error_pages: ErrorPages,
+    pub async_detection_queue: Option<AsyncDetectionQueue>,
+    pub event_broadcaster: EventBroadcaster,
+    pub reputation_aggregator: ReputationAggregator,
+    pub reputation_manager: ReputationManager,
 }
 
 pub fn create_app(settings: SharedSettings) -> Router {
+    build_app_internal(settings, None)
+}
+
+pub fn create_app_with_async_detection(
+    settings: SharedSettings,
+    async_detection_queue: AsyncDetectionQueue,
+) -> Router {
+    build_app_internal(settings, Some(async_detection_queue))
+}
+
+fn build_app_internal(
+    settings: SharedSettings,
+    async_detection_queue: Option<AsyncDetectionQueue>,
+) -> Router {
     let error_pages = load_error_pages(&settings.read());
+    let event_broadcaster = EventBroadcaster::new();
+    let reputation_configs = settings.read().ip_reputation_providers.clone();
+    let reputation_manager = ReputationManager::new(&reputation_configs);
+    let reputation_aggregator = ReputationAggregator::with_defaults();
 
     let state = Arc::new(AppState {
         settings: settings.clone(),
         error_pages,
+        async_detection_queue,
+        event_broadcaster: event_broadcaster.clone(),
+        reputation_aggregator,
+        reputation_manager,
     });
+
+    #[cfg(feature = "cluster-mode")]
+    let cluster_manager = Arc::new(crate::cluster::ClusterManager::new(settings.clone()));
+    #[cfg(feature = "cluster-mode")]
+    let config_sync = Arc::new(ConfigSync::new(cluster_manager.clone(), settings.clone()));
+    #[cfg(feature = "cluster-mode")]
+    let threat_share = Arc::new(ThreatIntelligenceShare::new(
+        cluster_manager.clone(),
+        settings.clone(),
+    ));
 
     let cors = CorsLayer::new()
         .allow_origin(
@@ -48,18 +97,119 @@ pub fn create_app(settings: SharedSettings) -> Router {
             axum::http::header::ORIGIN,
             axum::http::HeaderName::from_static("x-requested-with"),
             axum::http::header::COOKIE,
+            axum::http::HeaderName::from_static("x-api-key"),
+            axum::http::HeaderName::from_static("x-internal-api-key"),
+            axum::http::HeaderName::from_static("x-cluster-secret"),
+            axum::http::HeaderName::from_static("x-init-token"),
         ]);
 
-    let internal_routes = routes::internal::router(state.clone());
-    let dashboard_routes = routes::dashboard::router(state.clone());
+    let dashboard_public_routes = routes::dashboard::public_router(state.clone());
+    let dashboard_protected_routes = routes::dashboard::protected_router(state.clone());
     let init_routes = routes::init::router(state.clone());
     let proxy_routes = routes::proxy::router(state.clone());
+    let plugin_routes = routes::plugins::router(state.clone());
+    let waf_api_routes = routes::waf_api::router(state.clone());
+    let waf_events_route = routes::waf_events::websocket_events_handler(state.clone());
+
+    let internal_state = state.clone();
+    let internal_routes = Router::new()
+        .merge(routes::internal::router(state.clone()))
+        .layer(from_fn(
+            move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+                let state = internal_state.clone();
+                async move {
+                    internal_api_auth_middleware(
+                        axum::extract::State(state),
+                        req.headers().clone(),
+                        req,
+                        next,
+                    )
+                    .await
+                }
+            },
+        ));
+
+    let dashboard_auth_state = state.clone();
+    let dashboard_protected_with_auth = Router::new()
+        .merge(dashboard_protected_routes)
+        .layer(from_fn(
+            move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+                let state = dashboard_auth_state.clone();
+                async move {
+                    dashboard_auth_middleware(
+                        axum::extract::State(state),
+                        req.headers().clone(),
+                        req,
+                        next,
+                    )
+                    .await
+                }
+            },
+        ));
+
+    let api_key_state = state.clone();
+    let waf_api_with_auth = Router::new().merge(waf_api_routes).layer(from_fn(
+        move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+            let state = api_key_state.clone();
+            async move {
+                api_key_auth_middleware(
+                    axum::extract::State(state),
+                    req.headers().clone(),
+                    req,
+                    next,
+                )
+                .await
+            }
+        },
+    ));
+
+    #[cfg(feature = "cluster-mode")]
+    let cm_clone = cluster_manager.clone();
+    #[cfg(feature = "cluster-mode")]
+    tokio::spawn(async move {
+        cm_clone.start_heartbeat_worker().await;
+        cm_clone.start_dead_node_detector().await;
+        cm_clone.start_discovery_worker().await;
+    });
+
+    #[cfg(not(feature = "cluster-mode"))]
+    let cluster_routes = axum::Router::new();
+
+    #[cfg(feature = "cluster-mode")]
+    let cluster_routes = {
+        let cluster_auth_state = state.clone();
+        Router::new()
+            .merge(routes::cluster::router(
+                state.clone(),
+                config_sync,
+                threat_share,
+            ))
+            .layer(from_fn(
+                move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+                    let state = cluster_auth_state.clone();
+                    async move {
+                        cluster_api_auth_middleware(
+                            axum::extract::State(state),
+                            req.headers().clone(),
+                            req,
+                            next,
+                        )
+                        .await
+                    }
+                },
+            ))
+    };
 
     Router::new()
         .merge(internal_routes)
-        .merge(dashboard_routes)
+        .merge(dashboard_public_routes)
+        .merge(dashboard_protected_with_auth)
         .merge(init_routes)
         .merge(proxy_routes)
+        .merge(plugin_routes)
+        .merge(cluster_routes)
+        .nest("/api/waf/v1", waf_api_with_auth)
+        .merge(waf_events_route)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)

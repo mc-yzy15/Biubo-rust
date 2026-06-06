@@ -4,20 +4,20 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Release version (e.g., 1.0.0-alpha.1)'
+        description: "Release version (e.g., 1.0.0-alpha.1)"
         required: true
         type: string
       release_type:
-        description: 'Release type: alpha, nightly, weekly, beta, stable, lts'
+        description: "Release type: canary, alpha, nightly, beta, stable, lts"
         required: true
         type: string
       make_latest:
-        description: 'Mark this release as the latest release (true/false)'
+        description: "Mark this release as the latest release (true/false)"
         required: false
         type: string
-        default: 'false'
+        default: "false"
       retention_days:
-        description: 'Number of days to retain build artifacts'
+        description: "Number of days to retain build artifacts"
         required: false
         type: number
         default: 30
@@ -25,28 +25,18 @@ on:
 env:
   CARGO_TERM_COLOR: always
   PROJECT_NAME: biubo-waf
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }} - ${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+  build-windows-x64:
+    name: Build Windows x86_64
+    runs-on: windows-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive_ext: zip
-            archive_cmd: zip
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            archive_ext: tar.gz
-            archive_cmd: tar
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            archive_ext: tar.gz
-            archive_cmd: tar
+          - target: x86_64-pc-windows-msvc
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -85,46 +75,633 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} --verbose
 
-      - name: Determine binary name
-        id: binary
-        shell: bash
+      - name: Install WiX Toolset
         run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            echo "name=${{ env.PROJECT_NAME }}.exe" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=${{ env.PROJECT_NAME }}" >> "$GITHUB_OUTPUT"
-          fi
+          curl -L -o wix.exe https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311.exe
+          .\wix.exe /install /quiet
 
-      - name: Create archive
+      - name: Create ZIP archive
         shell: bash
         run: |
-          BINARY_NAME="${{ steps.binary.outputs.name }}"
           ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}"
-
           mkdir -p dist
+          7z a "dist/${ARTIFACT_NAME}.zip" "target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}.exe"
 
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cd "target/${{ matrix.target }}/release"
-            zip "../../../../../dist/${ARTIFACT_NAME}.zip" "$BINARY_NAME"
-          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            cd "target/${{ matrix.target }}/release"
-            tar czf "../../../../../dist/${ARTIFACT_NAME}.tar.gz" "$BINARY_NAME"
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            cd "target/${{ matrix.target }}/release"
-            tar czf "../../../../../dist/${ARTIFACT_NAME}.tar.gz" "$BINARY_NAME"
-          fi
+      - name: Create MSI installer (WiX)
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "=== MSI Build Diagnostics ==="
+          echo "Checking WiX installation..."
+          ls -la "/c/Program Files (x86)/WiX Toolset v311/bin/" 2>/dev/null || echo "WiX v311 not found at default path"
+          cargo install cargo-wix --locked 2>&1 || echo "cargo-wix install failed"
+          echo "=== Attempting cargo wix ==="
+          cargo wix --target ${{ matrix.target }} --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.msi" || {
+            echo "WARNING: MSI build failed, ZIP artifact is still available"
+            exit 0
+          }
 
-      - name: Upload build artifact
+      - name: Upload Windows x64 artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}
+          name: ${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}-windows
+          path: dist/*
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+
+  build-windows-arm64:
+    name: Build Windows ARM64
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-pc-windows-msvc
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install ARM64 cross-compilation tools
+        run: |
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if ([string]::IsNullOrEmpty($vsPath)) {
+            Write-Error "ARM64 build tools not installed. Please install Visual Studio ARM64 tools."
+            exit 1
+          }
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/index
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-index-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target/${{ matrix.target }}/release
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Create ZIP archive
+        shell: bash
+        run: |
+          ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}"
+          mkdir -p dist
+          7z a "dist/${ARTIFACT_NAME}.zip" "target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}.exe"
+
+      - name: Upload Windows ARM64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}-windows-arm64
+          path: dist/*
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+
+  build-linux-x86_64:
+    name: Build Linux x86_64
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+          cargo install cargo-deb --locked
+          cargo install cargo-generate-rpm --locked
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/index
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-index-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target/${{ matrix.target }}/release
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Create TAR.GZ archive
+        shell: bash
+        run: |
+          ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}"
+          mkdir -p dist
+          tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "${{ env.PROJECT_NAME }}"
+
+      - name: Build DEB package
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "=== DEB Build Diagnostics ==="
+          echo "Target: ${{ matrix.target }}"
+          echo "Working dir: $(pwd)"
+          ls -la target/${{ matrix.target }}/release/biubo-waf 2>&1 || echo "binary not found"
+          ls -la systemd/ 2>&1 || echo "systemd dir not found"
+          cat Cargo.toml | grep -A 15 "\[package.metadata.deb\]" || echo "deb metadata not found"
+          echo "=== Attempting cargo deb ==="
+          cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb" || {
+            echo "WARNING: DEB build failed, continuing with other artifacts"
+            exit 0
+          }
+
+      - name: Build RPM package (YUM/DNF)
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo generate-rpm --target ${{ matrix.target }} || {
+            echo "WARNING: RPM build failed, continuing"
+            exit 0
+          }
+          find "target/${{ matrix.target }}/generate-rpm/" -name "*.rpm" -exec cp {} "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.rpm" \; 2>/dev/null || true
+
+      - name: Upload Linux x86_64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}-linux
+          path: dist/*
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+
+  build-linux-arm64:
+    name: Build Linux ARM64
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install ARM64 cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get install -y rpm
+          cargo install cargo-deb --locked
+          cargo install cargo-generate-rpm --locked
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/index
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-index-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target/${{ matrix.target }}/release
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Create TAR.GZ archive
+        shell: bash
+        run: |
+          ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}"
+          mkdir -p dist
+          tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "${{ env.PROJECT_NAME }}"
+
+      - name: Build DEB package
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "=== DEB Build Diagnostics (ARM64) ==="
+          echo "Target: ${{ matrix.target }}"
+          ls -la target/${{ matrix.target }}/release/biubo-waf 2>&1 || echo "binary not found"
+          ls -la systemd/ 2>&1 || echo "systemd dir not found"
+          echo "=== Attempting cargo deb ==="
+          cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb" || {
+            echo "WARNING: DEB build failed (ARM64), continuing"
+            exit 0
+          }
+
+      - name: Build RPM package (YUM/DNF)
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo generate-rpm --target ${{ matrix.target }} || {
+            echo "WARNING: RPM build failed (ARM64), continuing"
+            exit 0
+          }
+          find "target/${{ matrix.target }}/generate-rpm/" -name "*.rpm" -exec cp {} "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.rpm" \; 2>/dev/null || true
+
+      - name: Upload Linux ARM64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}-linux-arm64
+          path: dist/*
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+
+  build-linux-loongarch64:
+    name: Build Linux LoongArch64 (龙芯)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: loongarch64-unknown-linux-musl
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig as cross-compiler for C dependencies
+        run: |
+          set -x
+          echo ">>> Fetching Zig download index..."
+          ZIG_INDEX=$(curl -fsSL https://ziglang.org/download/index.json)
+          
+          echo ">>> Resolving download URL for x86_64-linux..."
+          ZIG_URL=$(echo "$ZIG_INDEX" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          # Strategy: prefer master (latest LLVM, full loongarch64 support)
+          # Fallback to stable versions (avoid 0.13.0 due to fp_to_fp16 LLVM bug)
+          
+          # 1. Try master x86_64-linux build (has latest LLVM, full target support)
+          arch = data.get('master', {}).get('x86_64-linux', {})
+          if isinstance(arch, dict) and 'tarball' in arch:
+              print(arch['tarball'])
+              sys.exit(0)
+          
+          # 2. Fallback: stable versions except 0.13.0 (LLVM19 fp_to_fp16 bug)
+          for ver in ['0.14.0', '0.12.0', '0.11.0', '0.10.0']:
+              if ver in data:
+                  arch = data[ver].get('x86_64-linux', {})
+                  if isinstance(arch, dict) and 'tarball' in arch:
+                      print(arch['tarball'])
+                      sys.exit(0)
+          
+          # 3. Last resort: any available version
+          for ver in sorted(data.keys(), reverse=True):
+              if 'dev' in ver or ver.startswith('0.'):
+                  arch = data.get(ver, {}).get('x86_64-linux', {})
+                  if isinstance(arch, dict) and 'tarball' in arch:
+                      print(arch['tarball'])
+                      sys.exit(0)
+          sys.exit(1)
+          ")
+          echo ">>> Using Zig URL: ${ZIG_URL}"
+          ZIG_VERSION=$(echo "$ZIG_INDEX" | python3 -c "
+          import json, sys, re
+          data = json.load(sys.stdin)
+          url = '$ZIG_URL'
+          m = re.search(r'/zig-(linux-x86_64-)?([\d.]+(?:-dev\.\d+\+[a-f0-9]+)?)\.tar', url)
+          print(m.group(2) if m else 'unknown')
+          ")
+          echo ">>> Zig version: ${ZIG_VERSION}"
+          
+          echo ">>> Downloading Zig ${ZIG_VERSION}..."
+          mkdir -p /opt
+          curl -fSL "$ZIG_URL" | tar xJ -C /opt
+          echo ">>> Download complete"
+          
+          ZIG_DIR=$(find /opt -name "zig" -type f -path "*zig-*" 2>/dev/null | head -1 | xargs dirname)
+          echo ">>> Zig installed at: ${ZIG_DIR}"
+          ${ZIG_DIR}/zig version
+          
+          echo ">>> Creating CC wrapper..."
+          CC_SCRIPT=/usr/local/bin/loongarch64-cc
+          printf '#!/bin/bash\n' > "$CC_SCRIPT"
+          printf 'ZIG="${ZIG_DIR:-%s}/zig"\n' "$ZIG_DIR" >> "$CC_SCRIPT"
+          printf 'ARGS=()\n' >> "$CC_SCRIPT"
+          printf 'SKIP_NEXT=0\n' >> "$CC_SCRIPT"
+          printf 'for a in "$@"; do\n' >> "$CC_SCRIPT"
+          printf '  if [ $SKIP_NEXT -eq 1 ]; then SKIP_NEXT=0; continue; fi\n' >> "$CC_SCRIPT"
+          printf '  case "$a" in\n' >> "$CC_SCRIPT"
+          printf '    --target=*|--param*)\n' >> "$CC_SCRIPT"
+          printf '      if [[ "$a" != --param=* ]] && [[ "$a" == --param ]]; then SKIP_NEXT=1; fi ;;\n' >> "$CC_SCRIPT"
+          printf '    -pedantic|-W*|-w) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fstack-protector*|-fno-omit-frame-pointer) ;;\n' >> "$CC_SCRIPT"
+          printf '    -ffunction-sections|-fdata-sections) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fwrapv|-fvisibility=*) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fno-exceptions|-fno-rtti) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fmath-errno|-frounding-math|-ftrapping-math) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fsigned-char|-funsigned-char) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fcommon|-fno-common) ;;\n' >> "$CC_SCRIPT"
+          printf '    -fshort-wchar|-fno-short-wchar) ;;\n' >> "$CC_SCRIPT"
+          printf '    -falign-functions*|-fno-align-functions*) ;;\n' >> "$CC_SCRIPT"
+          printf '    -frecip*|-fno-recip*) ;;\n' >> "$CC_SCRIPT"
+          printf '    -march=*|-mtune=*|-mcpu=*|-mabi=*|-mfloat-abi*|-mthumb) ;;\n' >> "$CC_SCRIPT"
+          printf '    --sysroot=*|-isysroot=*) ;;\n' >> "$CC_SCRIPT"
+          printf '    -pipe|-O*|-g*|-s) ;;\n' >> "$CC_SCRIPT"
+          printf '    -DOPENSSL_NO_ASM) ;;\n' >> "$CC_SCRIPT"
+          printf '    *) ARGS+=("$a") ;;\n' >> "$CC_SCRIPT"
+          printf '  esac\n' >> "$CC_SCRIPT"
+          printf 'done\n' >> "$CC_SCRIPT"
+          printf 'exec "$ZIG" cc -target loongarch64-linux-musl "${ARGS[@]}"\n' >> "$CC_SCRIPT"
+          chmod +x "$CC_SCRIPT"
+          echo ">>> Wrapper created, contents:"
+          cat "$CC_SCRIPT"
+          sed 's/cc/c++/g; s/CC/CXX/g' "$CC_SCRIPT" > /usr/local/bin/loongarch64-cxx
+          printf '#!/bin/bash\nexec %s/zig ar "$@"\n' "$ZIG_DIR" > /usr/local/bin/loongarch64-ar
+          chmod +x /usr/local/bin/loongarch64-cxx /usr/local/bin/loongarch64-ar
+          echo ">>> Test compilation..."
+          echo 'int main(){return 0;}' | "$CC_SCRIPT" -x c - -o /tmp/test-loongarch64 2>&1
+          echo ">>> Test exit code: $?"
+          ls -la /tmp/test-loongarch64 2>&1 || true
+          echo ">>> Setting env vars..."
+          echo "CARGO_TARGET_LOONGARCH64_UNKNOWN_LINUX_MUSL_LINKER=${CC_SCRIPT}" >> $GITHUB_ENV
+          echo "CC_loongarch64_unknown_linux_musl=${CC_SCRIPT}" >> $GITHUB_ENV
+          echo "CXX_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
+          echo "AR_loongarch64_unknown_linux_musl=/usr/local/bin/loongarch64-ar" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER=${CC_SCRIPT}" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER=/usr/local/bin/loongarch64-cxx" >> $GITHUB_ENV
+          echo ">>> Done!"
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y rpm && cargo install cargo-deb --locked && cargo install cargo-generate-rpm --locked
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/index
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-index-
+
+      - name: Build release binary (LoongArch64 via Zig 0.12)
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create TAR.GZ archive
+        shell: bash
+        run: |
+          ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}"
+          mkdir -p dist
+          tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "${{ env.PROJECT_NAME }}"
+
+      - name: Build DEB package (LoongArch64)
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo deb --target ${{ matrix.target }} --no-build --output "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.deb" || {
+            echo "WARNING: DEB build failed (LoongArch64), continuing"
+            exit 0
+          }
+
+      - name: Build RPM package (YUM/DNF, LoongArch64)
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo generate-rpm --target ${{ matrix.target }} || {
+            echo "WARNING: RPM build failed (LoongArch64), continuing"
+            exit 0
+          }
+          find "target/${{ matrix.target }}/generate-rpm/" -name "*.rpm" -exec cp {} "dist/${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}.rpm" \; 2>/dev/null || true
+
+      - name: Upload Linux LoongArch64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}-linux-loongarch64
+          path: dist/*
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+
+  build-macos-x64:
+    name: Build macOS x86_64
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/index
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-index-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target/${{ matrix.target }}/release
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Create TAR.GZ archive
+        shell: bash
+        run: |
+          ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}"
+          mkdir -p dist
+          tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "${{ env.PROJECT_NAME }}"
+
+      - name: Create DMG package
+        shell: bash
+        run: |
+          chmod +x scripts/create-dmg.sh
+          ./scripts/create-dmg.sh "${{ inputs.version }}" "target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}" "dist"
+
+      - name: Upload macOS x64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}-macos
+          path: dist/*
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+
+  build-macos-arm64:
+    name: Build macOS ARM64 (Apple Silicon)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/index
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-index-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target/${{ matrix.target }}/release
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Create TAR.GZ archive
+        shell: bash
+        run: |
+          ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}"
+          mkdir -p dist
+          tar czf "dist/${ARTIFACT_NAME}.tar.gz" -C "target/${{ matrix.target }}/release" "${{ env.PROJECT_NAME }}"
+
+      - name: Create DMG package
+        shell: bash
+        run: |
+          chmod +x scripts/create-dmg.sh
+          ./scripts/create-dmg.sh "${{ inputs.version }}" "target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}" "dist"
+
+      - name: Upload macOS ARM64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ inputs.version }}-${{ matrix.target }}-macos-arm64
           path: dist/*
           retention-days: ${{ inputs.retention_days }}
           if-no-files-found: error
 
   create-release:
     name: Create GitHub Release
-    needs: build
+    needs:
+      [
+        build-windows-x64,
+        build-windows-arm64,
+        build-linux-x86_64,
+        build-linux-arm64,
+        build-linux-loongarch64,
+        build-macos-x64,
+        build-macos-arm64,
+        build-docker,
+      ]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -165,14 +742,73 @@ jobs:
           fi
 
           echo "" >> release_notes.md
+          echo "## Supported Platforms & Architectures" >> release_notes.md
           echo "" >> release_notes.md
-          echo "## Supported Platforms" >> release_notes.md
+          echo "| Platform | Architecture | Package Formats |" >> release_notes.md
+          echo "|----------|--------------|-----------------|" >> release_notes.md
+          echo "| Windows | x86_64 | ZIP, MSI (WiX) |" >> release_notes.md
+          echo "| Windows | ARM64 | ZIP |" >> release_notes.md
+          echo "| Ubuntu/Debian | x86_64 | TAR.GZ, DEB |" >> release_notes.md
+          echo "| Ubuntu/Debian | ARM64 | TAR.GZ, DEB |" >> release_notes.md
+          echo "| CentOS/RHEL/Fedora (YUM/DNF) | x86_64 | TAR.GZ, RPM |" >> release_notes.md
+          echo "| CentOS/RHEL/Fedora (YUM/DNF) | ARM64 | TAR.GZ, RPM |" >> release_notes.md
+          echo "| Loongnix/UOS (龙芯) | LoongArch64 | TAR.GZ, DEB, RPM |" >> release_notes.md
+          echo "| macOS | x86_64 (Intel) | TAR.GZ, DMG |" >> release_notes.md
+          echo "| macOS | ARM64 (Apple Silicon) | TAR.GZ, DMG |" >> release_notes.md
+
           echo "" >> release_notes.md
-          echo "| Platform | Architecture | File Format |" >> release_notes.md
-          echo "|----------|--------------|-------------|" >> release_notes.md
-          echo "| Windows | x86_64 | ZIP |" >> release_notes.md
-          echo "| Linux | x86_64 | TAR.GZ |" >> release_notes.md
-          echo "| macOS | x86_64 | TAR.GZ |" >> release_notes.md
+          echo "## Installation" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### Windows" >> release_notes.md
+          echo '```powershell' >> release_notes.md
+          echo "# Using ZIP (portable)" >> release_notes.md
+          echo "Expand-Archive -Path biubo-waf-*.zip -DestinationPath C:\BiuboWAF" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Using MSI installer" >> release_notes.md
+          echo "msiexec /i biubo-waf-*.msi" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### Ubuntu/Debian (APT)" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "# Install DEB package" >> release_notes.md
+          echo "sudo dpkg -i biubo-waf-*.deb" >> release_notes.md
+          echo "sudo apt-get install -f" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Start service" >> release_notes.md
+          echo "sudo systemctl enable --now biubo-waf" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### CentOS/RHEL/Fedora (YUM/DNF)" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "# Using YUM" >> release_notes.md
+          echo "sudo yum install biubo-waf-*.rpm" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Using DNF (Fedora/RHEL 8+)" >> release_notes.md
+          echo "sudo dnf install biubo-waf-*.rpm" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Start service" >> release_notes.md
+          echo "sudo systemctl enable --now biubo-waf" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### Loongnix/UOS (龙芯架构)" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "# Install DEB package (Loongnix)" >> release_notes.md
+          echo "sudo dpkg -i biubo-waf-*loongarch64*.deb" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Or install RPM package (UOS)" >> release_notes.md
+          echo "sudo yum install biubo-waf-*loongarch64*.rpm" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### macOS" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "# Mount DMG and copy binary" >> release_notes.md
+          echo "hdiutil attach biubo-waf-*.dmg" >> release_notes.md
+          echo "cp /Volumes/Biubo\\ WAF/biubo-waf /usr/local/bin/" >> release_notes.md
+          echo "hdiutil detach /Volumes/Biubo\\ WAF" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Run" >> release_notes.md
+          echo "biubo-waf" >> release_notes.md
+          echo '```' >> release_notes.md
 
           cat release_notes.md
 
@@ -189,7 +825,7 @@ jobs:
           tag_name: v${{ inputs.version }}
           name: ${{ env.PROJECT_NAME }} v${{ inputs.version }}
           body_path: release_notes.md
-          draft: false
+          draft: ${{ inputs.release_type != 'stable' && inputs.release_type != 'lts' }}
           prerelease: ${{ inputs.release_type != 'stable' && inputs.release_type != 'lts' }}
           make_latest: ${{ inputs.make_latest }}
           files: release-assets/*
@@ -227,21 +863,22 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: |
+            ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=${{ inputs.version }}
-            type=raw,value=${{ inputs.release_type }},enable=${{ inputs.release_type == 'stable' }}
             type=raw,value=latest,enable=${{ inputs.release_type == 'stable' }}
-            type=raw,value=nightly,enable=${{ inputs.release_type == 'nightly' }}
             type=raw,value=weekly,enable=${{ inputs.release_type == 'weekly' }}
-            type=raw,value=beta,enable=${{ inputs.release_type == 'beta' }}
+            type=raw,value=nightly,enable=${{ inputs.release_type == 'nightly' }}
+            type=raw,value=monthly,enable=${{ inputs.release_type == 'monthly' }}
+            type=raw,value=canary,enable=${{ inputs.release_type == 'canary' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

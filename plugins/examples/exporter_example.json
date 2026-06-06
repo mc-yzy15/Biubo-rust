@@ -1,0 +1,14 @@
+{
+  "metadata": {
+    "name": "siem_exporter",
+    "version": "1.0.0",
+    "description": "Exports WAF security logs to a centralized SIEM system (e.g., Splunk, Elastic Security, IBM QRadar) for correlation, alerting, and long-term retention",
+    "author": "biubo-team",
+    "type": "exporter"
+  },
+  "config": {
+    "export_endpoint": "https://siem.example.com/api/v1/security/events",
+    "format": "json",
+    "batch_size": 50
+  }
+}
