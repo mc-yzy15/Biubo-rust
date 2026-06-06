@@ -8,7 +8,6 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
-use serde_json::json;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]

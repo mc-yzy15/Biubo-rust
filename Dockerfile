@@ -37,6 +37,6 @@ ENV WAF_PORT=80
 
 LABEL org.opencontainers.image.source="https://github.com/mc-yzy15/Biubo-rust" \
     org.opencontainers.image.description="A Web Application Firewall that Thinks, Remembers, and Visualizes" \
-    org.opencontainers.image.licenses="MIT"
+    org.opencontainers.image.licenses="AGPL-3.0"
 
 ENTRYPOINT ["./biubo-waf"]

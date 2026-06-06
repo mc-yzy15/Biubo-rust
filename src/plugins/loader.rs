@@ -1,10 +1,8 @@
-#![allow(unused_imports)]
-
 use crate::plugins::types::{PluginConfig, PluginInstance, PluginMetadata, PluginType};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PluginFileConfig {
@@ -14,7 +12,6 @@ struct PluginFileConfig {
 
 pub struct PluginLoader {
     plugin_dirs: Vec<PathBuf>,
-    watch_interval: Duration,
     last_scan: Instant,
 }
 
@@ -25,13 +22,8 @@ impl PluginLoader {
 
         Self {
             plugin_dirs: vec![detection_dir, exporter_dir],
-            watch_interval: Duration::from_secs(30),
             last_scan: Instant::now(),
         }
-    }
-
-    pub fn should_reload(&self) -> bool {
-        self.last_scan.elapsed() >= self.watch_interval
     }
 
     #[cfg(feature = "plugin-system")]

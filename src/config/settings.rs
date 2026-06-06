@@ -84,10 +84,6 @@ pub struct Settings {
     pub rule_engine: RuleEngineConfig,
 
     pub ip_reputation_providers: Vec<crate::core::models::ReputationProviderConfig>,
-
-    pub behavior_profiling_enabled: bool,
-    pub behavior_window_seconds: u64,
-
     pub llm_quick_model: String,
     pub llm_quick_base_url: String,
     pub llm_quick_api_key: String,
@@ -103,6 +99,9 @@ pub struct Settings {
     pub waf_api_keys: Vec<WafApiKey>,
 
     pub auto_patch_enabled: bool,
+
+    pub llm_timeout_secs: u64,
+    pub llm_fail_open: bool,
 
     pub internal_api_key: String,
     pub cluster_shared_secret: String,
@@ -215,9 +214,6 @@ impl Default for Settings {
 
             ip_reputation_providers: Vec::new(),
 
-            behavior_profiling_enabled: false,
-            behavior_window_seconds: 3600,
-
             llm_quick_model: "qwen-turbo".to_string(),
             llm_quick_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
             llm_quick_api_key: String::new(),
@@ -233,6 +229,9 @@ impl Default for Settings {
             waf_api_keys: Vec::new(),
 
             auto_patch_enabled: false,
+
+            llm_timeout_secs: 30,
+            llm_fail_open: false,
 
             internal_api_key: generate_random_secret(),
             cluster_shared_secret: generate_random_secret(),
@@ -254,7 +253,6 @@ const DEFAULT_UPLOAD_EXTENSIONS: &[&str] = &[
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[allow(dead_code)]
 struct PersistedConfig {
     waf_port: Option<u16>,
     dashboard_password: Option<String>,
@@ -274,8 +272,6 @@ struct PersistedConfig {
     ssl_port: Option<u16>,
     rule_engine: Option<RuleEngineConfig>,
     ip_reputation_providers: Option<Vec<crate::core::models::ReputationProviderConfig>>,
-    behavior_profiling_enabled: Option<bool>,
-    behavior_window_seconds: Option<u64>,
     llm_quick_model: Option<String>,
     llm_quick_base_url: Option<String>,
     llm_quick_api_key: Option<String>,
@@ -374,6 +370,10 @@ impl Settings {
             if self.ssl_acme_email.is_empty() {
                 return Err("SSL_ACME_EMAIL cannot be empty when SSL is enabled".to_string());
             }
+        }
+
+        if self.llm_timeout_secs == 0 {
+            return Err("LLM_TIMEOUT_SECS must be positive".to_string());
         }
 
         Ok(())
@@ -479,6 +479,48 @@ impl Settings {
                     }
                     if let Some(v) = cfg.ssl_port {
                         self.ssl_port = v;
+                    }
+                    if let Some(v) = cfg.rule_engine {
+                        self.rule_engine = v;
+                    }
+                    if let Some(v) = cfg.ip_reputation_providers {
+                        self.ip_reputation_providers = v;
+                    }
+                    if let Some(v) = cfg.llm_quick_model {
+                        self.llm_quick_model = v;
+                    }
+                    if let Some(v) = cfg.llm_quick_base_url {
+                        self.llm_quick_base_url = v;
+                    }
+                    if let Some(v) = cfg.llm_quick_api_key {
+                        self.llm_quick_api_key = v;
+                    }
+                    if let Some(v) = cfg.llm_deep_model {
+                        self.llm_deep_model = v;
+                    }
+                    if let Some(v) = cfg.llm_deep_base_url {
+                        self.llm_deep_base_url = v;
+                    }
+                    if let Some(v) = cfg.llm_deep_api_key {
+                        self.llm_deep_api_key = v;
+                    }
+                    if let Some(v) = cfg.cluster_mode {
+                        self.cluster_mode = v;
+                    }
+                    if let Some(v) = cfg.cluster_role {
+                        self.cluster_role = v;
+                    }
+                    if let Some(v) = cfg.cluster_redis_url {
+                        self.cluster_redis_url = Some(v);
+                    }
+                    if let Some(v) = cfg.waf_api_enabled {
+                        self.waf_api_enabled = v;
+                    }
+                    if let Some(v) = cfg.waf_api_keys {
+                        self.waf_api_keys = v;
+                    }
+                    if let Some(v) = cfg.auto_patch_enabled {
+                        self.auto_patch_enabled = v;
                     }
                     if let Some(v) = cfg.internal_api_key {
                         self.internal_api_key = v;

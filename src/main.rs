@@ -1,8 +1,9 @@
-#![allow(unused_imports)]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use crate::api::app::create_app_with_async_detection;
 use crate::config::settings::{Settings, SharedSettings};
-use crate::core::engine::async_detection_queue::start_async_detection_workers;
+use crate::core::engine::async_detection_queue::{default_worker_count, start_async_detection_workers};
 use axum::routing::get;
 use axum::Router;
 use std::sync::Arc;
@@ -17,12 +18,18 @@ use tokio_rustls::server::TlsStream;
 #[cfg(feature = "ssl-support")]
 use tokio_rustls::TlsAcceptor;
 
+#[cfg(feature = "commercial")]
+use ee_license::verifier;
+#[cfg(feature = "commercial")]
+use ee_license::error::LicenseError;
+#[cfg(feature = "commercial")]
+use ee_license::tui_setup;
+
 mod api;
 mod cluster;
 mod config;
 mod core;
 mod data;
-mod error;
 mod plugins;
 mod services;
 mod utils;
@@ -36,6 +43,66 @@ async fn main() {
         .init();
 
     tracing::info!("Starting Biubo WAF Protective Proxy (Rust Edition)...");
+
+    // ── Commercial Edition: License Verification ──────────────────────
+    #[cfg(feature = "commercial")]
+    {
+        tracing::info!("Commercial Edition detected, verifying license...");
+
+        // Check if config.json exists → if not, launch TUI setup wizard
+        let config_path = std::env::args().find(|a| a == "--config")
+            .and_then(|_| std::env::args().nth(std::env::args().position(|a| a == "--config").unwrap_or(0) + 1))
+            .unwrap_or_else(|| "./config.json".to_string());
+
+        if !std::path::Path::new(&config_path).exists() && !std::env::args().any(|a| a == "--config") {
+            tracing::info!("No configuration file found, launching TUI setup wizard...");
+            match tui_setup::run_setup_wizard() {
+                Ok(Some(setup)) => {
+                    // Save config from wizard
+                    tracing::info!("TUI setup wizard completed. License: {:?}", setup.license_path);
+                    // TODO: Save setup result to config.json
+                }
+                Ok(None) => {
+                    tracing::info!("TUI setup wizard cancelled by user.");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    tracing::warn!("TUI setup wizard failed: {}. Continuing with defaults.", e);
+                }
+            }
+        }
+
+        // Locate license file
+        let license_path = std::env::args().find(|a| a == "--license-file")
+            .and_then(|_| {
+                let pos = std::env::args().position(|a| a == "--license-file").unwrap_or(0);
+                std::env::args().nth(pos + 1)
+            })
+            .or_else(|| std::env::var("BIUBO_LICENSE_PATH").ok())
+            .unwrap_or_else(|| "./biubo-waf-ee.license".to_string());
+
+        let state_dir = std::path::PathBuf::from("./.biubo-license-state");
+
+        match verifier::verify(std::path::Path::new(&license_path), &state_dir) {
+            Ok(result) => {
+                let payload = &result.payload;
+                tracing::info!(
+                    "License OK: {} | {} | {} | → {}",
+                    payload.license_id,
+                    payload.customer_name,
+                    payload.edition,
+                    payload.end_date.format("%Y-%m-%d")
+                );
+                eprintln!("Edition: {} (Licensed: {})", payload.edition, payload.license_id);
+            }
+            Err(e) => {
+                tracing::error!("[{}] {}", e.error_id(), e.user_message());
+                eprintln!("[{}] {}", e.error_id(), e.user_message());
+                std::process::exit(e.exit_code());
+            }
+        }
+    }
+    // ── End Commercial Edition ────────────────────────────────────────
 
     #[cfg(feature = "plugin-system")]
     plugins::init_plugins();
@@ -62,16 +129,14 @@ async fn main() {
 
     let session_timeout = settings.read().session_timeout as u64;
     let session_gc_interval = settings.read().session_gc_interval as u64;
-    let cache_ttl = settings.read().cache_ttl as u64;
-    let cache_gc_interval = settings.read().cache_gc_interval as u64;
     let rate_gc_interval = settings.read().rate_gc_interval as u64;
 
     core::session::manager::start_session_gc_worker(session_timeout, session_gc_interval);
     core::session::manager::start_log_gc_worker(settings.clone());
-    core::engine::waf_engine::start_cache_gc_worker(cache_ttl, cache_gc_interval);
     core::security::rate_limit::start_rate_gc_worker(rate_gc_interval);
     core::security::challenge::start_token_gc_worker();
     crate::api::routes::proxy::start_strike_gc_worker();
+    core::engine::waf_engine::start_cache_gc_worker();
 
     let host_count = settings.read().proxy_map.keys().count();
     if host_count > 0 {
@@ -83,11 +148,40 @@ async fn main() {
         );
     }
 
-    let async_detection_queue = start_async_detection_workers(4, 1000, settings.clone());
+    let worker_count = default_worker_count();
+    let async_detection_queue = start_async_detection_workers(worker_count, 1000, settings.clone());
 
     tracing::info!("Background GC workers started");
 
     let app = create_app_with_async_detection(settings.clone(), async_detection_queue);
+
+    let _shutdown_signal = {
+        use tokio::signal;
+
+        #[cfg(unix)]
+        let sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                Box::pin(async move { sig.recv().await; }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            }
+            Err(e) => {
+                tracing::warn!("Failed to register SIGTERM handler ({}), using only SIGINT", e);
+                Box::pin(std::future::pending::<()>()) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            }
+        };
+        #[cfg(not(unix))]
+        let sigterm = Box::pin(std::future::pending::<()>()) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+        async move {
+            tokio::select! {
+                _ = signal::ctrl_c() => {
+                    tracing::info!("Received SIGINT, shutting down gracefully...");
+                }
+                _ = sigterm => {
+                    tracing::info!("Received SIGTERM, shutting down gracefully...");
+                }
+            }
+        }
+    };
 
     #[cfg(feature = "ssl-support")]
     if ssl_enabled && !ssl_domains.is_empty() && !ssl_acme_email.is_empty() {
@@ -204,7 +298,10 @@ async fn main() {
             }
         };
 
-        if let Err(e) = axum::serve(listener, app).await {
+        if let Err(e) = axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal)
+            .await
+        {
             tracing::error!("Server error: {}", e);
         }
     }

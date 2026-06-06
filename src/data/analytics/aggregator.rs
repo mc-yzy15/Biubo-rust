@@ -46,12 +46,6 @@ pub fn update_analytics(db: &ProxyDB, entry: &serde_json::Value) {
         obj[key] = serde_json::json!(current + 1);
     }
 
-    #[allow(dead_code)]
-    fn inc_str(obj: &mut serde_json::Value, key: &str) {
-        let current = obj.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-        obj[key] = serde_json::json!(current + 1);
-    }
-
     if is_hacker {
         if let Some(security) = analytics.get_mut("security") {
             let blocked = security

@@ -18,27 +18,9 @@ pub fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
     (len_eq & result.ct_eq(&0u8)).into()
 }
 
-pub fn is_hashed(value: &str) -> bool {
-    value.starts_with("$2a$") || value.starts_with("$2b$") || value.starts_with("$2y$")
-}
-
-pub fn needs_migration(value: &str) -> bool {
-    !is_hashed(value) && !value.is_empty()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_hash_and_verify_password() {
-        let password = "test_password_123";
-        let hashed = hash_password(password).expect("Hashing failed");
-        
-        assert!(is_hashed(&hashed));
-        assert!(verify_password(password, &hashed));
-        assert!(!verify_password("wrong_password", &hashed));
-    }
 
     #[test]
     fn test_constant_time_compare() {
@@ -50,12 +32,5 @@ mod tests {
         assert!(constant_time_compare(a, b));
         assert!(!constant_time_compare(a, c));
         assert!(!constant_time_compare(a, d));
-    }
-
-    #[test]
-    fn test_needs_migration() {
-        assert!(needs_migration("plaintext_password"));
-        assert!(!needs_migration("$2a$12$hashedvalue"));
-        assert!(!needs_migration(""));
     }
 }

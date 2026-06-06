@@ -1,5 +1,6 @@
 use crate::api::app::AppState;
 use crate::api::response::ApiResponse;
+use crate::core::metrics::METRICS;
 use crate::data::storage::manager::get_db;
 use crate::utils::compression::decompress_json;
 use crate::utils::query_parser::{evaluate, parse};
@@ -81,6 +82,8 @@ struct BanRequest {
 pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_check))
+        .route("/ready", get(ready_check))
+        .route("/metrics", get(metrics_handler))
         .route("/scripts/biubo/beacon.js", get(beacon))
         .route("/handle/biubo/greeting", post(greeting))
         .route("/handle/biubo/screen", post(receive_screen_data))
@@ -106,6 +109,36 @@ async fn health_check() -> Response {
         "status": "ok",
         "service": "biubo-waf"
     })).into_response()
+}
+
+async fn ready_check(State(state): State<Arc<AppState>>) -> Response {
+    let s = state.settings.read();
+    let mut checks = serde_json::Map::new();
+    checks.insert("service".into(), json!("biubo-waf"));
+
+    // Check API key for LLM if configured
+    let llm_configured = !s.api_key.is_empty() || !s.llm_quick_api_key.is_empty();
+    checks.insert("llm_configured".into(), json!(llm_configured));
+
+    // Check proxy_map is not empty (at least one upstream configured)
+    let proxies_configured = !s.proxy_map.is_empty();
+    checks.insert("proxies_configured".into(), json!(proxies_configured));
+
+    // Check initialized
+    let initialized = s.initialized;
+    checks.insert("initialized".into(), json!(initialized));
+
+    let all_ready = llm_configured || !proxies_configured || initialized;
+    let status = if all_ready { "ok" } else { "degraded" };
+    checks.insert("status".into(), json!(status));
+
+    let http_status = if all_ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (http_status, Json(json!(checks))).into_response()
 }
 
 async fn beacon(State(state): State<Arc<AppState>>) -> Response {
@@ -534,4 +567,14 @@ async fn add_blacklist(
     db.ban_ip(&ip, &reason, payload.expire).await;
 
     Json(ApiResponse::<()>::ok()).into_response()
+}
+
+async fn metrics_handler() -> Response {
+    let output = METRICS.prometheus_output();
+    (
+        StatusCode::OK,
+        [("Content-Type", "text/plain; charset=utf-8")],
+        output,
+    )
+        .into_response()
 }

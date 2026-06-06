@@ -69,10 +69,6 @@ fn resolve_host(host: &str) -> Option<IpAddr> {
     })
 }
 
-pub fn validate_ip_format(ip: &str) -> bool {
-    IpAddr::from_str(ip).is_ok()
-}
-
 fn is_localhost(host: &str) -> bool {
     let lower = host.to_lowercase();
     lower == "localhost" 

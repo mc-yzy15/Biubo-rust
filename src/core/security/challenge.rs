@@ -116,7 +116,8 @@ pub fn verify_challenge_token(
 
     if is_valid {
         USED_TOKENS.insert(token_key, SystemTime::now());
-        cleanup_used_tokens();
+        // Note: cleanup is handled by the background GC worker - removing inline
+        // cleanup to avoid O(n) scan on every verification (hot path optimization).
         ChallengeStatus::Valid
     } else {
         ChallengeStatus::Invalid
@@ -126,17 +127,36 @@ pub fn verify_challenge_token(
 fn cleanup_used_tokens() {
     let now = SystemTime::now();
     let cutoff = Duration::from_secs(TOKEN_REUSE_WINDOW_SECS);
-    
-    USED_TOKENS.retain(|_, used_time| {
-        now.duration_since(*used_time)
-            .map(|elapsed| elapsed < cutoff)
-            .unwrap_or(false)
-    });
+
+    // Use per-key removal instead of retain() to avoid holding all shard locks at once.
+    let expired: Vec<String> = USED_TOKENS
+        .iter()
+        .filter(|entry| {
+            now.duration_since(*entry.value())
+                .map(|elapsed| elapsed >= cutoff)
+                .unwrap_or(true)
+        })
+        .map(|entry| entry.key().clone())
+        .collect();
+
+    for key in expired {
+        USED_TOKENS.remove(&key);
+    }
 }
 
+/// Starts a background garbage-collection worker for expired challenge tokens.
+///
+/// # Design rationale: why `std::thread::spawn` instead of `tokio::task::spawn`
+///
+/// - `cleanup_used_tokens()` does only synchronous DashMap iteration (collecting
+///   expired keys, then removing them one by one) -- there is no async work.
+/// - A dedicated OS thread avoids occupying a tokio worker thread with a
+///   long-lived sleeping loop that blocks for 30 seconds between cycles.
+/// - This keeps the tokio runtime free to handle inbound requests without
+///   competition from background maintenance work.
 pub fn start_token_gc_worker() {
     std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(60));
+        std::thread::sleep(Duration::from_secs(30));
         cleanup_used_tokens();
     });
 }

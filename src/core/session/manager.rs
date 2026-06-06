@@ -129,6 +129,36 @@ pub fn update_session_log(
     }
 }
 
+/// 处理 rrweb 事件数组，计算持续时间并压缩事件数据。
+///
+/// 返回 `(duration_sec, compressed_rrweb)`：
+/// - 当 `events` 为空时，`duration_sec` 为 `None`，`compressed_rrweb` 为空字符串。
+/// - 否则 `duration_sec` 为首末事件时间戳之差（秒），`compressed_rrweb` 为压缩后的字符串。
+fn process_rrweb_events(events: &[serde_json::Value]) -> (Option<u64>, serde_json::Value) {
+    if events.is_empty() {
+        return (None, serde_json::json!(""));
+    }
+
+    let first_ts = events
+        .first()
+        .and_then(|v| v.get("timestamp"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let last_ts = events
+        .last()
+        .and_then(|e| e.get("timestamp"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let duration_sec = (last_ts - first_ts).abs() as u64 / 1000;
+    let compressed_rrweb = serde_json::json!(String::from_utf8_lossy(&compress_json(
+        &serde_json::json!({"events": events})
+    ))
+    .to_string());
+
+    (Some(duration_sec), compressed_rrweb)
+}
+
 pub fn update_rrweb_events(request_id: &str, host: &str, events: Vec<serde_json::Value>) {
     if events.is_empty() {
         return;
@@ -174,24 +204,12 @@ pub fn update_rrweb_events(request_id: &str, host: &str, events: Vec<serde_json:
         }
     }
 
-    existing_events.extend(events.clone());
+    existing_events.extend(events);
 
-    if !existing_events.is_empty() {
-        let first_ts = existing_events
-            .first()
-            .and_then(|v| v.get("timestamp"))
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        let last_ts = existing_events
-            .last()
-            .and_then(|e| e.get("timestamp"))
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        target_entry["duration_sec"] = serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
-        target_entry["rrweb"] = serde_json::json!(String::from_utf8_lossy(&compress_json(
-            &serde_json::json!({"events": existing_events})
-        ))
-        .to_string());
+    let (duration_sec, compressed_rrweb) = process_rrweb_events(&existing_events);
+    if let Some(dur) = duration_sec {
+        target_entry["duration_sec"] = serde_json::json!(dur);
+        target_entry["rrweb"] = compressed_rrweb;
     }
 
     log_db.set("logs", serde_json::json!(logs));
@@ -213,15 +231,11 @@ fn flush_session(sid: &str, session: &Session) {
 
     if log.country.is_empty() {
         let cdn_ip = log.cdn_ip.clone();
-        let cdn_ip_for_task = cdn_ip.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build();
-            if let Ok(handle) = rt {
-                let info = handle.block_on(async { get_ip_info(&cdn_ip_for_task).await });
-                tracing::debug!("IP info fetched for {}: {:?}", cdn_ip_for_task, info);
-            }
+        // Use tokio::spawn instead of std::thread::spawn to avoid creating a new
+        // OS thread + Tokio runtime per session with missing geo data.
+        tokio::spawn(async move {
+            let info = get_ip_info(&cdn_ip).await;
+            tracing::debug!("IP info fetched for {}: {:?}", cdn_ip, info);
         });
     }
 
@@ -250,28 +264,12 @@ fn flush_session(sid: &str, session: &Session) {
                 .get("rrweb")
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!([]));
-            if rrweb_val.is_array() {
-                if let Some(arr) = rrweb_val.as_array() {
-                    if !arr.is_empty() {
-                        let first_ts = arr[0]
-                            .get("timestamp")
-                            .and_then(|v| v.as_f64())
-                            .unwrap_or(0.0);
-                        let last_ts = arr
-                            .last()
-                            .and_then(|e| e.get("timestamp"))
-                            .and_then(|v| v.as_f64())
-                            .unwrap_or(0.0);
-                        log_value["duration_sec"] =
-                            serde_json::json!((last_ts - first_ts).abs() as u64 / 1000);
-                        log_value["rrweb"] = serde_json::json!(String::from_utf8_lossy(&compress_json(
-                            &serde_json::json!({"events": arr})
-                        ))
-                        .to_string());
-                    } else {
-                        log_value["rrweb"] = serde_json::json!("");
-                    }
+            if let Some(arr) = rrweb_val.as_array() {
+                let (duration_sec, compressed_rrweb) = process_rrweb_events(arr);
+                if let Some(dur) = duration_sec {
+                    log_value["duration_sec"] = serde_json::json!(dur);
                 }
+                log_value["rrweb"] = compressed_rrweb;
             } else {
                 log_value["rrweb"] = serde_json::json!("");
             }
@@ -435,4 +433,74 @@ pub fn start_log_gc_worker(settings: SharedSettings) {
             std::thread::sleep(std::time::Duration::from_secs(3600 * 24));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::compression::decompress_json;
+
+    #[test]
+    fn test_process_rrweb_events_empty() {
+        let events: Vec<serde_json::Value> = vec![];
+        let (duration, rrweb) = process_rrweb_events(&events);
+        assert_eq!(duration, None);
+        assert_eq!(rrweb, serde_json::json!(""));
+    }
+
+    #[test]
+    fn test_process_rrweb_events_single_event() {
+        let events = vec![serde_json::json!({
+            "timestamp": 1000.0,
+            "type": 4,
+            "data": {}
+        })];
+        let (duration, rrweb) = process_rrweb_events(&events);
+        assert_eq!(duration, Some(0));
+        let decompressed = decompress_json(rrweb.as_str().unwrap().as_bytes());
+        let arr = decompressed["events"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["timestamp"], 1000.0);
+    }
+
+    #[test]
+    fn test_process_rrweb_events_multiple_events() {
+        let events = vec![
+            serde_json::json!({"timestamp": 1000.0, "type": 4}),
+            serde_json::json!({"timestamp": 3000.0, "type": 4}),
+            serde_json::json!({"timestamp": 6000.0, "type": 4}),
+        ];
+        let (duration, rrweb) = process_rrweb_events(&events);
+        assert_eq!(duration, Some(5));
+
+        let decompressed = decompress_json(rrweb.as_str().unwrap().as_bytes());
+        let arr = decompressed["events"].as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["timestamp"], 1000.0);
+        assert_eq!(arr[2]["timestamp"], 6000.0);
+    }
+
+    #[test]
+    fn test_process_rrweb_events_missing_timestamps() {
+        let events = vec![
+            serde_json::json!({"type": 4}),
+            serde_json::json!({"timestamp": 5000.0, "type": 4}),
+        ];
+        let (duration, rrweb) = process_rrweb_events(&events);
+        assert_eq!(duration, Some(5));
+
+        let decompressed = decompress_json(rrweb.as_str().unwrap().as_bytes());
+        let arr = decompressed["events"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn test_process_rrweb_events_reverse_order() {
+        let events = vec![
+            serde_json::json!({"timestamp": 5000.0, "type": 4}),
+            serde_json::json!({"timestamp": 1000.0, "type": 4}),
+        ];
+        let (duration, _) = process_rrweb_events(&events);
+        assert_eq!(duration, Some(4));
+    }
 }

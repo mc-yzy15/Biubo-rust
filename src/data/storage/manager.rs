@@ -1,16 +1,13 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
 use crate::config::settings::Settings;
 use crate::data::storage::base::Database;
+use serde_json::Value;
 
 struct PendingLogEntry {
     host: String,
@@ -38,23 +35,6 @@ fn start_log_writer_worker(mut rx: tokio::sync::mpsc::UnboundedReceiver<PendingL
     });
 }
 
-#[cfg(feature = "plugin-system")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BanRecord {
-    pub reason: String,
-    pub expire: Option<u32>,
-    pub added_at: String,
-    pub country: String,
-    pub city: String,
-}
-
-#[cfg(feature = "plugin-system")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhitelistRecord {
-    pub remark: String,
-    pub added_at: String,
-}
-
 pub struct ProxyDB {
     pub host: String,
     pub host_dir: PathBuf,
@@ -71,7 +51,7 @@ impl ProxyDB {
         std::fs::create_dir_all(host_dir.join("logs"))?;
 
         let ram_path = host_dir.join("RAM.msgpack");
-        let ram = Database::new(&ram_path, false, 5, std::time::Duration::from_secs(5))?;
+        let ram = Database::new_with_pool(&ram_path, false, 5)?;
 
         let mut db = ProxyDB {
             host: host.to_string(),
@@ -90,6 +70,57 @@ impl ProxyDB {
         db.ensure_log_db()?;
 
         Ok(db)
+    }
+
+    /// Create a new ProxyDB at a custom path (used as fallback when normal path fails)
+    pub fn new_with_path(host: &str, host_dir: &PathBuf, settings: &Settings) -> std::io::Result<Self> {
+        std::fs::create_dir_all(host_dir.join("logs"))?;
+
+        let ram_path = host_dir.join("RAM.msgpack");
+        let ram = Database::new_with_pool(&ram_path, false, 5)?;
+
+        let mut db = ProxyDB {
+            host: host.to_string(),
+            host_dir: host_dir.clone(),
+            ram: Arc::new(ram),
+            log_db: Mutex::new(None),
+            log_path: Mutex::new(String::new()),
+            template_root: settings.template_root.clone(),
+            lock: Mutex::new(()),
+        };
+
+        if db.ram.is_empty() {
+            db.init_ram_if_empty(settings)?;
+        }
+
+        db.ensure_log_db()?;
+
+        Ok(db)
+    }
+
+    /// Create an ephemeral in-memory-only ProxyDB (ultimate fallback, no persistent I/O)
+    pub fn new_ephemeral(host: &str) -> Self {
+        let host_dir = std::env::temp_dir().join("biubo-waf-ephemeral").join(host);
+        let _ = std::fs::create_dir_all(&host_dir);
+
+        let ram_path = host_dir.join("RAM.msgpack");
+        let ram = Database::new_with_pool(&ram_path, false, 5)
+            .unwrap_or_else(|_| {
+                let fallback_path = std::env::temp_dir()
+                    .join(format!("biubo-waf-ram-{}.msgpack", host));
+                Database::new_with_pool(&fallback_path, false, 5)
+                    .expect("Impossible: temp fallback DB creation failed")
+            });
+
+        ProxyDB {
+            host: host.to_string(),
+            host_dir,
+            ram: Arc::new(ram),
+            log_db: Mutex::new(None),
+            log_path: Mutex::new(String::new()),
+            template_root: std::path::PathBuf::new(),
+            lock: Mutex::new(()),
+        }
     }
 
     fn init_ram_if_empty(&mut self, settings: &Settings) -> std::io::Result<()> {
@@ -138,7 +169,7 @@ impl ProxyDB {
                 let _ = db.flush();
             }
 
-            let db = Database::new(&new_path, false, 5, std::time::Duration::from_secs(5))?;
+            let db = Database::new_with_pool(&new_path, false, 5)?;
             if db.is_empty() {
                 let template_path = self.template_root.join("log.json");
                 if template_path.exists() {
@@ -180,9 +211,14 @@ impl ProxyDB {
     }
 
     pub fn write_log_direct(&self, entry: serde_json::Value) {
-        #[cfg(feature = "plugin-system")]
-        let entry_for_exporter = entry.clone();
-        let should_export = {
+        // Use the new O(1) individual-key path when a request_id is present.
+        if entry.get("request_id").and_then(|v| v.as_str()).is_some() {
+            self.write_log_entry(entry);
+            return;
+        }
+
+        // Legacy path for entries without request_id
+        let _ = {
             let _guard = self.lock.lock();
             let _ = self.ensure_log_db();
             let log_db = self.log_db.lock();
@@ -192,37 +228,16 @@ impl ProxyDB {
                     .and_then(|v| v.as_array().cloned())
                     .unwrap_or_default();
 
-                let rid = entry.get("request_id").and_then(|v| v.as_str());
-
-                if let Some(rid) = rid {
-                    if let Some(pos) = logs
-                        .iter()
-                        .position(|e| e.get("request_id").and_then(|v| v.as_str()) == Some(rid))
-                    {
-                        logs[pos] = entry;
-                        db.set("logs", serde_json::json!(logs));
-                        true
-                    } else {
-                        logs.push(entry);
-                        db.set("logs", serde_json::json!(logs));
-                        true
-                    }
-                } else {
-                    logs.push(entry);
-                    db.set("logs", serde_json::json!(logs));
-                    true
+                const MAX_LOG_ENTRIES: usize = 10_000;
+                if logs.len() >= MAX_LOG_ENTRIES {
+                    let remove_count = MAX_LOG_ENTRIES / 5;
+                    logs.drain(0..remove_count);
                 }
-            } else {
-                false
+
+                logs.push(entry);
+                db.set("logs", serde_json::json!(logs));
             }
         };
-
-        if should_export {
-            #[cfg(feature = "plugin-system")]
-            tokio::spawn(async move {
-                crate::plugins::trigger_exporters(entry_for_exporter).await;
-            });
-        }
     }
 
     pub fn ram_get(&self, key: &str) -> Option<serde_json::Value> {
@@ -470,10 +485,25 @@ impl ProxyDB {
         let _ = self.ensure_log_db();
         let log_db = self.log_db.lock();
         match *log_db {
-            Some(ref db) => db
-                .get("logs")
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default(),
+            Some(ref db) => {
+                // Try new individual-key format first (log_index + log:{id})
+                let index = db.get("log_index");
+                if let Some(Value::Array(ids)) = &index {
+                    let mut logs: Vec<serde_json::Value> = Vec::with_capacity(ids.len());
+                    for id_val in ids {
+                        if let Some(id_str) = id_val.as_str() {
+                            if let Some(entry) = db.get(&format!("log:{}", id_str)) {
+                                logs.push(entry);
+                            }
+                        }
+                    }
+                    return logs;
+                }
+                // Fall back to legacy "logs" array format
+                db.get("logs")
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default()
+            }
             None => vec![],
         }
     }
@@ -483,6 +513,12 @@ impl ProxyDB {
         let log_db = self.log_db.lock();
         match *log_db {
             Some(ref db) => {
+                // Try new individual-key format first
+                let entry = db.get(&format!("log:{}", id));
+                if entry.is_some() {
+                    return entry;
+                }
+                // Fall back to legacy "logs" array
                 let logs = db
                     .get("logs")
                     .and_then(|v| v.as_array().cloned())
@@ -492,6 +528,52 @@ impl ProxyDB {
                     .cloned()
             }
             None => None,
+        }
+    }
+
+    /// Write a log entry using the new individual-key format.
+    /// Stores the entry as `log:{request_id}` and maintains a capped `log_index` for iteration.
+    /// This is O(1) instead of O(n) like the legacy `write_log_direct`.
+    pub fn write_log_entry(&self, entry: serde_json::Value) {
+        let request_id = entry
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let _guard = self.lock.lock();
+        let _ = self.ensure_log_db();
+        let log_db = self.log_db.lock();
+        if let Some(ref db) = *log_db {
+            if let Some(ref rid) = request_id {
+                // Store the full entry as an individual key
+                db.set(&format!("log:{}", rid), entry);
+
+                // Maintain a capped index for enumeration
+                const MAX_INDEX_SIZE: usize = 10_000;
+                let mut index = db
+                    .get("log_index")
+                    .unwrap_or_else(|| Value::Array(Vec::new()));
+
+                if let Value::Array(ref mut ids) = index {
+                    // Check if this request_id already exists in index
+                    let exists = ids.iter().any(|v| v.as_str() == Some(rid));
+                    if !exists {
+                        if ids.len() >= MAX_INDEX_SIZE {
+                            ids.remove(0);
+                        }
+                        ids.push(Value::String(rid.clone()));
+                    }
+                }
+                db.set("log_index", index);
+            } else {
+                // Fallback: no request_id, use legacy array
+                let mut logs = db
+                    .get("logs")
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default();
+                logs.push(entry);
+                db.set("logs", Value::Array(logs));
+            }
         }
     }
 }
@@ -508,7 +590,31 @@ pub fn get_db(host: &str) -> Arc<ProxyDB> {
                 Ok(db) => Arc::new(db),
                 Err(e) => {
                     tracing::error!("Failed to create ProxyDB for host '{}': {}", host, e);
-                    panic!("Failed to create ProxyDB for host '{}': {}", host, e)
+                    tracing::warn!(
+                        "Creating fallback ProxyDB for '{}' to avoid crash",
+                        host
+                    );
+                    // Try fallback in temp directory
+                    let fallback_dir = std::env::temp_dir()
+                        .join("biubo-waf-fallback")
+                        .join(host);
+                    match ProxyDB::new_with_path(host, &fallback_dir, &settings) {
+                        Ok(db) => {
+                            tracing::warn!(
+                                "Using fallback ProxyDB for '{}' at {:?}",
+                                host,
+                                fallback_dir
+                            );
+                            Arc::new(db)
+                        }
+                        Err(fallback_err) => {
+                            tracing::error!(
+                                "Fallback ProxyDB also failed: {} - using in-memory stub",
+                                fallback_err
+                            );
+                            Arc::new(ProxyDB::new_ephemeral(host))
+                        }
+                    }
                 }
             }
         })

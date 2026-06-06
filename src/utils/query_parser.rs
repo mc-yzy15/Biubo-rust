@@ -38,16 +38,12 @@ pub enum FieldOp {
     Eq,
     Fuzzy,
     In,
-    #[allow(dead_code)]
-    Range,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldValue {
     Str(String),
     List(Vec<String>),
-    #[allow(dead_code)]
-    Range(String, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,13 +121,6 @@ pub fn evaluate(node: &AstNode, record: &serde_json::Value) -> bool {
                         } else {
                             values.iter().any(|v| v.eq_ignore_ascii_case(&rec_str))
                         }
-                    } else {
-                        false
-                    }
-                }
-                FieldOp::Range => {
-                    if let FieldValue::Range(start, end) = value {
-                        rec_str.as_str() >= start.as_str() && rec_str.as_str() <= end.as_str()
                     } else {
                         false
                     }

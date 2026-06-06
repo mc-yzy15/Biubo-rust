@@ -32,11 +32,6 @@ pub struct AppState {
     pub reputation_manager: ReputationManager,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn create_app(settings: SharedSettings) -> Router {
-    build_app_internal(settings, None)
-}
-
 pub fn create_app_with_async_detection(
     settings: SharedSettings,
     async_detection_queue: AsyncDetectionQueue,
@@ -66,12 +61,17 @@ fn build_app_internal(
     #[cfg(feature = "cluster-mode")]
     let cluster_manager = Arc::new(crate::cluster::ClusterManager::new(settings.clone()));
     #[cfg(feature = "cluster-mode")]
-    let config_sync = Arc::new(ConfigSync::new(cluster_manager.clone(), settings.clone()));
+    let config_sync = Arc::new(ConfigSync {
+        manager: cluster_manager.clone(),
+        settings: settings.clone(),
+        pending_acks: dashmap::DashMap::new(),
+    });
     #[cfg(feature = "cluster-mode")]
-    let threat_share = Arc::new(ThreatIntelligenceShare::new(
-        cluster_manager.clone(),
-        settings.clone(),
-    ));
+    let threat_share = Arc::new(ThreatIntelligenceShare {
+        local_blocklist: dashmap::DashMap::new(),
+        event_log: dashmap::DashMap::new(),
+        event_count: std::sync::atomic::AtomicUsize::new(0),
+    });
 
     let cors = CorsLayer::new()
         .allow_origin(

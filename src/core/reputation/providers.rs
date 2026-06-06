@@ -5,14 +5,11 @@ use std::fmt;
 use crate::core::models::ReputationProviderResult;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum ProviderError {
     HttpError(reqwest::Error),
     DnsError(String),
-    ParseError(String),
     TimeoutError,
     ApiError { status: u16, message: String },
-    Other(String),
 }
 
 impl fmt::Display for ProviderError {
@@ -20,12 +17,10 @@ impl fmt::Display for ProviderError {
         match self {
             ProviderError::HttpError(e) => write!(f, "HTTP error: {}", e),
             ProviderError::DnsError(e) => write!(f, "DNS error: {}", e),
-            ProviderError::ParseError(e) => write!(f, "Parse error: {}", e),
             ProviderError::TimeoutError => write!(f, "Provider query timed out"),
             ProviderError::ApiError { status, message } => {
                 write!(f, "API error ({}): {}", status, message)
             }
-            ProviderError::Other(e) => write!(f, "Error: {}", e),
         }
     }
 }
@@ -39,12 +34,6 @@ impl From<reqwest::Error> for ProviderError {
         } else {
             ProviderError::HttpError(e)
         }
-    }
-}
-
-impl From<ProviderError> for crate::error::WafError {
-    fn from(e: ProviderError) -> Self {
-        crate::error::WafError::Network(e.to_string())
     }
 }
 

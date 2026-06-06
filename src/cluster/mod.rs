@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![doc = "Cluster management module for distributed WAF deployment"]
 
 use chrono::{DateTime, Utc};
@@ -17,12 +16,6 @@ use crate::core::models::{ClusterNode, ClusterRole};
 pub mod sync;
 #[cfg(feature = "cluster-mode")]
 pub mod threat_share;
-
-#[cfg(feature = "cluster-mode")]
-pub trait ClusterTransport {
-    async fn with_redis(&mut self, redis_url: &str) -> bool;
-    async fn broadcast_via_http(&self, endpoint: &str, data: &[u8]) -> Vec<Result<(), String>>;
-}
 
 const HEARTBEAT_INTERVAL_SECS: u64 = 10;
 const DEAD_NODE_THRESHOLD_SECS: u64 = 30;

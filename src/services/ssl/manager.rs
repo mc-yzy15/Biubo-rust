@@ -91,18 +91,6 @@ impl SslManager {
         Ok(())
     }
 
-    #[cfg(feature = "ssl-support")]
-    #[cfg_attr(not(test), allow(dead_code))]
-    async fn save_certificate_states(
-        &self,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let state_file = self.cert_dir.join("certificates.json");
-        let content = serde_json::to_string_pretty(&self.certificate_states)?;
-        fs::write(&state_file, content).await?;
-        info!("Certificate states saved to {:?}", state_file);
-        Ok(())
-    }
-
     fn is_certificate_expired(&self, state: &CertificateState) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
