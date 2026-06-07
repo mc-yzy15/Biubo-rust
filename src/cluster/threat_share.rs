@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use uuid::Uuid;
 
 const MAX_THREAT_EVENTS: usize = 1000;
 const IP_BLOCKLIST_TTL_SECS: u64 = 3600;

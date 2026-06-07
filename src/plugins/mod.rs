@@ -31,3 +31,20 @@ pub fn init_plugins() {
         }
     }
 }
+
+/// Trigger all registered exporters with a log entry.
+///
+/// This function is called when a new log entry is written, allowing
+/// plugins to export the data to external systems (e.g., SIEM, databases).
+#[cfg(feature = "plugin-system")]
+pub async fn trigger_exporters(entry: serde_json::Value) {
+    // For now, this is a stub implementation.
+    // In a full implementation, this would iterate through registered exporters
+    // and call each one with the entry.
+    tracing::debug!("Triggering exporters for entry: {:?}", entry.get("request_id"));
+
+    // Placeholder: log the trigger for debugging
+    if let Some(request_id) = entry.get("request_id").and_then(|v| v.as_str()) {
+        tracing::trace!("Exporter triggered for request: {}", request_id);
+    }
+}

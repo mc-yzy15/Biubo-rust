@@ -1,10 +1,14 @@
 {
   "API_KEY": "",
+  "CLUSTER_SHARED_SECRET": "e63f8fc8d57c14df3025c43aae6b437b40f8ab76f1e9ca1974652b3c1bd00f3e",
   "CORS_ORIGINS": [
     "http://ip.zplb.org.cn:7000"
   ],
-  "DASHBOARD_PASSWORD": "015714e2911e5ca9",
+  "DASHBOARD_PASSWORD": "a74c77e772c46964",
   "DASHBOARD_PATH": "/admin",
+  "INITIALIZED": false,
+  "INIT_TOKEN": "8580853117587d7a48a005906ed19c27c1baafbd51ff170dccab7f46f309a694",
+  "INTERNAL_API_KEY": "47095f0fdda68183b6ab3d2d2c5d9862a7ce55d9fa25cb3c6d34615192b44e57",
   "LLM_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "LLM_MODEL": "qwen-plus",
   "PROXY_MAP": {

@@ -276,15 +276,18 @@ async fn reverse_proxy(
         );
 
         // CC attack detection (independent from rate limiting)
-        let cc_result = check_cc_attack(&client_ip, &path, &user_agent);
-        if cc_result.blocked {
+        let cc_threshold = 100; // Default threshold for CC attack detection
+        let cc_result = check_cc_attack(&client_ip, &host, 0, cc_threshold);
+        if cc_result.is_attack {
             let db = get_db(&host);
-            let _ = db.ban_ip(&client_ip, "cc_attack", Some(10)).await;
-            tracing::warn!(
-                "[CC] {} blocked for CC attack pattern",
-                client_ip
-            );
-            return build_forbidden_response(&state, "403", _request_start);
+            if cc_result.should_ban {
+                let _ = db.ban_ip(&client_ip, "cc_attack", Some(10)).await;
+                tracing::warn!(
+                    "[CC] {} blocked for CC attack pattern",
+                    client_ip
+                );
+                return build_forbidden_response(&state, "403", _request_start);
+            }
         }
 
         let (file_safe, file_msg) = check_file_security(

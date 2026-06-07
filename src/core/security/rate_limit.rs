@@ -21,6 +21,7 @@ pub enum BlockReason {
     Banned,
     TemporaryBanned,
     RateLimit,
+    GrayZoneBan,
 }
 
 pub struct RateLimitResult {
@@ -146,4 +147,47 @@ pub fn start_rate_gc_worker(gc_interval: u64) {
             });
         }
     });
+}
+
+/// Result type for CC attack detection.
+pub struct CcAttackResult {
+    pub is_attack: bool,
+    pub strike_count: u32,
+    pub should_ban: bool,
+}
+
+/// Check for CC (Challenge Collapsar) attack patterns.
+///
+/// This function implements a gray-zone detection mechanism:
+/// - Tracks request frequency per IP
+/// - Identifies suspicious patterns that may indicate automated attacks
+/// - Returns whether to apply temporary ban or increase monitoring
+pub fn check_cc_attack(ip: &str, host: &str, request_count: u32, threshold: u32) -> CcAttackResult {
+    // Simple CC attack detection based on request frequency
+    // In a more sophisticated implementation, this could include:
+    // - Request pattern analysis
+    // - User-agent fingerprinting
+    // - Geographic anomaly detection
+    // - Behavioral analysis
+
+    let db = get_db(host);
+
+    // Check if already banned
+    if db.is_banned(ip) {
+        return CcAttackResult {
+            is_attack: true,
+            strike_count: 0,
+            should_ban: false, // Already banned
+        };
+    }
+
+    // Gray zone: requests between threshold and 2x threshold
+    let is_attack = request_count > threshold;
+    let should_ban = request_count > threshold * 2;
+
+    CcAttackResult {
+        is_attack,
+        strike_count: request_count.saturating_sub(threshold),
+        should_ban,
+    }
 }

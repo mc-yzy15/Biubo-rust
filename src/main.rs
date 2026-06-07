@@ -158,7 +158,7 @@ async fn main() {
 
     let app = create_app_with_async_detection(settings.clone(), async_detection_queue);
 
-    let shutdown_signal = {
+    let _shutdown_signal = {
         use tokio::signal;
 
         #[cfg(unix)]
