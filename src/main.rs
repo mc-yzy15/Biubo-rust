@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -30,6 +32,7 @@ mod cluster;
 mod config;
 mod core;
 mod data;
+mod error;
 mod plugins;
 mod services;
 mod utils;
@@ -155,7 +158,7 @@ async fn main() {
 
     let app = create_app_with_async_detection(settings.clone(), async_detection_queue);
 
-    let _shutdown_signal = {
+    let shutdown_signal = {
         use tokio::signal;
 
         #[cfg(unix)]

@@ -425,17 +425,70 @@ Under the AGPL-3.0, you are free to use, modify, and distribute the Software, **
 
 If your use case **cannot comply with the AGPL-3.0 obligations** (for example: offering Biubo WAF as a closed-source SaaS / managed service, or embedding it into a proprietary product without disclosing your modifications), a **separate Commercial License** is available.
 
-The Commercial License lets you:
+#### 📦 Edition Comparison
+
+| Edition | Throughput | Tenants | Nodes | Best For |
+|---------|------------|---------|-------|----------|
+| **Trial** | 5 Gbps | 1 | 1 | Evaluation & testing |
+| **Starter** | 50 Gbps | 1 | 3 | Small businesses |
+| **Professional** | 200 Gbps | 10 | 10 | Growing organizations |
+| **Enterprise** | 1 Tbps | 50 | 50 | Large enterprises |
+| **Ultimate** | Unlimited | Unlimited | Unlimited | Mission-critical deployments |
+| **Pay-as-you-go** | Flexible | 1 | 1 | Variable workloads |
+| **OEM** | 1 Tbps | Unlimited | Unlimited | Product integration |
+
+#### ⚡ Enterprise Features by Edition
+
+| Feature | Trial | Starter | Professional | Enterprise | Ultimate | Paygo | OEM |
+|---------|:-----:|:-------:|:------------:|:----------:|:--------:|:-----:|:---:|
+| Core WAF Engine | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Local Model Inference | — | ✅ | ✅ | ✅ | ✅ | — | — |
+| Multi-Tenant Isolation | — | — | ✅ | ✅ | ✅ | — | ✅ |
+| Audit & Compliance Logs | — | — | ✅ | ✅ | ✅ | — | ✅ |
+| SSO (SAML/OIDC) | — | — | — | ✅ | ✅ | — | — |
+| BGP Blackholing | — | — | — | ✅ | ✅ | — | — |
+| GeoIP Intelligence | — | — | — | ✅ | ✅ | — | — |
+| Financial Rules Pack | — | — | — | ✅ | ✅ | — | — |
+| Government Rules Pack | — | — | — | ✅ | ✅ | — | — |
+| APT Detection Rules | — | — | — | — | ✅ | — | — |
+| RAG Learning Engine | — | — | — | — | ✅ | — | — |
+| Pay-as-you-go Metering | — | — | — | — | — | ✅ | — |
+
+#### 💰 Pricing
+
+**Subscription Plans** (includes all updates + email support):
+
+| Plan | CNY | USD | Savings |
+|------|-----|-----|---------|
+| Monthly | ¥299/mo | $49/mo | — |
+| Quarterly | ¥799/qtr | $129/qtr | ~10% |
+| Half-year | ¥1,499/6mo | $249/6mo | ~16% |
+| **Annual** | ¥2,499/yr | $399/yr | ~30% |
+
+**Perpetual Buyout** (one-time purchase):
+
+| Plan | CNY | USD |
+|------|-----|-----|
+| Current version only | ¥9,999 | $1,499 |
+| + 1 year updates | ¥14,999 | $2,299 |
+| + 2 years updates | ¥19,999 | $2,999 |
+| + Lifetime updates | ¥34,999 | $4,999 |
+
+> 💡 **Free Trial**: 30-day free trial available on request.
+> 🎓 **Discounts**: 50% off for educational institutions, non-profits, and open-source projects.
+
+#### ✅ Commercial License Benefits
 
 - Use Biubo WAF in closed-source / proprietary products
 - Offer Biubo WAF as a hosted or managed service **without** source disclosure
 - Receive prioritized technical support and SLAs
 - Obtain indemnification
-- Access Enterprise Edition features: kernel bypass (1.8 Tbps), Hyperscan DFA, local model inference, multi-tenant isolation, and more
+- Access Enterprise Edition exclusive features
 
-📩 **For commercial licensing, please contact:** [yingmoliuguang@yeah.net](mailto:yingmoliuguang@yeah.net)
+📩 **For commercial licensing:** [yingmoliuguang@icloud.com](mailto:yingmoliuguang@icloud.com)
+📧 **For technical support:** [yingmoliuguang@yeah.net](mailto:yingmoliuguang@yeah.net)
 
-See [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md) for full details.
+See [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md) for full terms and conditions.
 
 ---
 

@@ -96,6 +96,8 @@ ratatui = { version = "0.28", optional = true }
 crossterm = { version = "0.28", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
 
+lru = "0.12"
+
 [features]
 default = ["full"]
 llm-detection = []

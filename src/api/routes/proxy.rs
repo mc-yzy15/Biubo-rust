@@ -1,4 +1,5 @@
 use crate::api::app::AppState;
+use crate::config::settings::Settings;
 use crate::core::engine::async_detection_queue::DetectionTask;
 use crate::core::engine::waf_engine::quick_detect_request;
 use crate::core::metrics::METRICS;
@@ -33,7 +34,6 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .with_state(state)
 }
 
-#[axum::debug_handler]
 async fn reverse_proxy(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
@@ -192,7 +192,7 @@ async fn reverse_proxy(
         let settings_arc = {
             let guard = state.settings.read();
             Arc::clone(&*guard)
-        }; // 锁在此处释放
+        };
         let rate_result = check_rate_limit(&client_ip, &host, &settings_arc).await;
 
         if rate_result.blocked {
@@ -363,7 +363,7 @@ async fn reverse_proxy(
     let settings_arc = {
         let guard = state.settings.read();
         Arc::clone(&*guard)
-    }; // 锁在此处释放
+    };
     let forward_result = forward_request(
         &target_base,
         &path,
