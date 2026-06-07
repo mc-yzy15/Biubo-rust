@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::data::storage::storage_utils;
@@ -23,8 +22,6 @@ struct FlushEntry {
 /// databases. Reduces OS threads from O(databases) to O(CPU cores).
 pub struct FlusherPool {
     registry: Arc<Mutex<Vec<FlushEntry>>>,
-    stop: Arc<AtomicBool>,
-    workers: Mutex<Vec<JoinHandle<()>>>,
 }
 
 /// Dropping this handle marks the database as dead so the pool skips it.
@@ -49,12 +46,11 @@ impl FlusherPool {
         let registry: Arc<Mutex<Vec<FlushEntry>>> = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
 
-        let mut workers = Vec::with_capacity(worker_count);
         for i in 0..worker_count {
             let reg = registry.clone();
             let stp = stop.clone();
 
-            let handle = std::thread::Builder::new()
+            let _handle = std::thread::Builder::new()
                 .name(format!("flusher-{}", i))
                 .spawn(move || loop {
                     if stp.load(Ordering::Acquire) {
@@ -101,14 +97,10 @@ impl FlusherPool {
                     }
                 })
                 .expect("Failed to spawn flusher worker");
-
-            workers.push(handle);
         }
 
         Self {
             registry,
-            stop,
-            workers: Mutex::new(workers),
         }
     }
 
@@ -132,13 +124,6 @@ impl FlusherPool {
         FlushHandle::new(alive)
     }
 
-    pub fn shutdown(&self) {
-        self.stop.store(true, Ordering::Release);
-        let mut workers = self.workers.lock();
-        for handle in workers.drain(..) {
-            let _ = handle.join();
-        }
-    }
 }
 
 // Global singleton: lazily initialized with CPU-count workers.

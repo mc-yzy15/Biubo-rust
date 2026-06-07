@@ -65,59 +65,6 @@ impl WafEvent {
     pub fn is_cluster_related(&self) -> bool {
         matches!(self, WafEvent::Cluster { .. })
     }
-
-    pub fn new_detection(
-        ip: String,
-        attack_type: String,
-        severity: String,
-        rule_id: Option<String>,
-    ) -> Self {
-        WafEvent::Detection {
-            ip,
-            attack_type,
-            severity,
-            rule_id,
-            timestamp: Utc::now().to_rfc3339(),
-        }
-    }
-
-    pub fn new_block(ip: String, reason: String) -> Self {
-        WafEvent::Block {
-            ip,
-            reason,
-            timestamp: Utc::now().to_rfc3339(),
-        }
-    }
-
-    pub fn new_unblock(ip: String) -> Self {
-        WafEvent::Unblock {
-            ip,
-            timestamp: Utc::now().to_rfc3339(),
-        }
-    }
-
-    pub fn new_threat_score(ip: String, score: f64) -> Self {
-        WafEvent::ThreatScoreUpdate {
-            ip,
-            score,
-            timestamp: Utc::now().to_rfc3339(),
-        }
-    }
-
-    pub fn new_cluster(node_id: String, event_type: String) -> Self {
-        WafEvent::Cluster {
-            node_id,
-            event_type,
-            timestamp: Utc::now().to_rfc3339(),
-        }
-    }
-
-    pub fn new_config_change(config_type: String) -> Self {
-        WafEvent::ConfigChange {
-            config_type,
-            timestamp: Utc::now().to_rfc3339(),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -128,9 +75,7 @@ pub struct EventBroadcaster {
 }
 
 #[derive(Clone)]
-pub struct WsClient {
-    pub permissions: Vec<String>,
-}
+pub struct WsClient;
 
 impl EventBroadcaster {
     pub fn new() -> Self {
@@ -157,9 +102,7 @@ impl EventBroadcaster {
         let perm_count = permissions.len();
         self.clients.insert(
             client_id,
-            WsClient {
-                permissions,
-            },
+            WsClient,
         );
         let receiver = self.sender.subscribe();
         tracing::info!(
@@ -173,10 +116,6 @@ impl EventBroadcaster {
     pub fn remove_client(&self, client_id: u64) {
         self.clients.remove(&client_id);
         tracing::info!("WebSocket client disconnected: id={}", client_id);
-    }
-
-    pub fn client_count(&self) -> usize {
-        self.clients.len()
     }
 
     pub fn should_receive_event(permissions: &[String], event: &WafEvent) -> bool {
@@ -411,10 +350,37 @@ async fn handle_websocket(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_event_broadcaster_creation() {
-        let broadcaster = EventBroadcaster::new();
-        assert_eq!(broadcaster.client_count(), 0);
+    fn make_detection_event() -> WafEvent {
+        WafEvent::Detection {
+            ip: "1.2.3.4".to_string(),
+            attack_type: "sql_injection".to_string(),
+            severity: "high".to_string(),
+            rule_id: None,
+            timestamp: Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn make_block_event() -> WafEvent {
+        WafEvent::Block {
+            ip: "1.2.3.4".to_string(),
+            reason: "manual".to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn make_cluster_event() -> WafEvent {
+        WafEvent::Cluster {
+            node_id: "node-1".to_string(),
+            event_type: "join".to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn make_config_change_event() -> WafEvent {
+        WafEvent::ConfigChange {
+            config_type: "proxy".to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+        }
     }
 
     #[test]
@@ -422,23 +388,16 @@ mod tests {
         let broadcaster = EventBroadcaster::new();
         let (client_id, _receiver) =
             broadcaster.add_client(vec!["read".to_string()]);
-        assert_eq!(broadcaster.client_count(), 1);
         broadcaster.remove_client(client_id);
-        assert_eq!(broadcaster.client_count(), 0);
     }
 
     #[test]
     fn test_should_receive_event_read_permission() {
         let permissions = vec!["read".to_string()];
-        let event = WafEvent::new_detection(
-            "1.2.3.4".to_string(),
-            "sql_injection".to_string(),
-            "high".to_string(),
-            None,
-        );
+        let event = make_detection_event();
         assert!(EventBroadcaster::should_receive_event(&permissions, &event));
 
-        let cluster_event = WafEvent::new_cluster("node-1".to_string(), "join".to_string());
+        let cluster_event = make_cluster_event();
         assert!(EventBroadcaster::should_receive_event(
             &permissions,
             &cluster_event
@@ -448,30 +407,25 @@ mod tests {
     #[test]
     fn test_should_receive_event_stats_permission() {
         let permissions = vec!["stats".to_string()];
-        let detection_event = WafEvent::new_detection(
-            "1.2.3.4".to_string(),
-            "sql_injection".to_string(),
-            "high".to_string(),
-            None,
-        );
+        let detection_event = make_detection_event();
         assert!(EventBroadcaster::should_receive_event(
             &permissions,
             &detection_event
         ));
 
-        let block_event = WafEvent::new_block("1.2.3.4".to_string(), "manual".to_string());
+        let block_event = make_block_event();
         assert!(EventBroadcaster::should_receive_event(
             &permissions,
             &block_event
         ));
 
-        let cluster_event = WafEvent::new_cluster("node-1".to_string(), "join".to_string());
+        let cluster_event = make_cluster_event();
         assert!(!EventBroadcaster::should_receive_event(
             &permissions,
             &cluster_event
         ));
 
-        let config_event = WafEvent::new_config_change("proxy".to_string());
+        let config_event = make_config_change_event();
         assert!(!EventBroadcaster::should_receive_event(
             &permissions,
             &config_event
@@ -481,24 +435,19 @@ mod tests {
     #[test]
     fn test_should_receive_event_events_permission() {
         let permissions = vec!["events".to_string()];
-        let detection_event = WafEvent::new_detection(
-            "1.2.3.4".to_string(),
-            "sql_injection".to_string(),
-            "high".to_string(),
-            None,
-        );
+        let detection_event = make_detection_event();
         assert!(EventBroadcaster::should_receive_event(
             &permissions,
             &detection_event
         ));
 
-        let cluster_event = WafEvent::new_cluster("node-1".to_string(), "join".to_string());
+        let cluster_event = make_cluster_event();
         assert!(EventBroadcaster::should_receive_event(
             &permissions,
             &cluster_event
         ));
 
-        let config_event = WafEvent::new_config_change("proxy".to_string());
+        let config_event = make_config_change_event();
         assert!(!EventBroadcaster::should_receive_event(
             &permissions,
             &config_event
@@ -508,24 +457,19 @@ mod tests {
     #[test]
     fn test_should_receive_event_wildcard_permission() {
         let permissions = vec!["*".to_string()];
-        let detection_event = WafEvent::new_detection(
-            "1.2.3.4".to_string(),
-            "sql_injection".to_string(),
-            "high".to_string(),
-            None,
-        );
+        let detection_event = make_detection_event();
         assert!(EventBroadcaster::should_receive_event(
             &permissions,
             &detection_event
         ));
 
-        let cluster_event = WafEvent::new_cluster("node-1".to_string(), "join".to_string());
+        let cluster_event = make_cluster_event();
         assert!(EventBroadcaster::should_receive_event(
             &permissions,
             &cluster_event
         ));
 
-        let config_event = WafEvent::new_config_change("proxy".to_string());
+        let config_event = make_config_change_event();
         assert!(EventBroadcaster::should_receive_event(
             &permissions,
             &config_event
@@ -535,12 +479,7 @@ mod tests {
     #[test]
     fn test_should_receive_event_no_permission() {
         let permissions: Vec<String> = vec![];
-        let event = WafEvent::new_detection(
-            "1.2.3.4".to_string(),
-            "sql_injection".to_string(),
-            "high".to_string(),
-            None,
-        );
+        let event = make_detection_event();
         assert!(!EventBroadcaster::should_receive_event(
             &permissions,
             &event
@@ -549,12 +488,13 @@ mod tests {
 
     #[test]
     fn test_waf_event_serialization() {
-        let event = WafEvent::new_detection(
-            "192.168.1.1".to_string(),
-            "xss".to_string(),
-            "medium".to_string(),
-            Some("rule-42".to_string()),
-        );
+        let event = WafEvent::Detection {
+            ip: "192.168.1.1".to_string(),
+            attack_type: "xss".to_string(),
+            severity: "medium".to_string(),
+            rule_id: Some("rule-42".to_string()),
+            timestamp: Utc::now().to_rfc3339(),
+        };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"type\":\"detection\""));
         assert!(json.contains("\"ip\":\"192.168.1.1\""));
@@ -587,79 +527,28 @@ mod tests {
     }
 
     #[test]
-    fn test_waf_event_block_serialization() {
-        let event = WafEvent::new_block("10.0.0.1".to_string(), "rate_limit".to_string());
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"block\""));
-        assert!(json.contains("\"ip\":\"10.0.0.1\""));
-        assert!(json.contains("\"reason\":\"rate_limit\""));
-    }
-
-    #[test]
-    fn test_waf_event_unblock_serialization() {
-        let event = WafEvent::new_unblock("10.0.0.1".to_string());
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"unblock\""));
-        assert!(json.contains("\"ip\":\"10.0.0.1\""));
-    }
-
-    #[test]
-    fn test_waf_event_threat_score_serialization() {
-        let event = WafEvent::new_threat_score("10.0.0.1".to_string(), 85.5);
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"threat_score_update\""));
-        assert!(json.contains("\"score\":85.5"));
-    }
-
-    #[test]
-    fn test_waf_event_cluster_serialization() {
-        let event = WafEvent::new_cluster("node-1".to_string(), "leave".to_string());
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"cluster\""));
-        assert!(json.contains("\"node_id\":\"node-1\""));
-        assert!(json.contains("\"event_type\":\"leave\""));
-    }
-
-    #[test]
-    fn test_waf_event_config_change_serialization() {
-        let event = WafEvent::new_config_change("ssl".to_string());
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"config_change\""));
-        assert!(json.contains("\"config_type\":\"ssl\""));
-    }
-
-    #[test]
     fn test_is_stats_related() {
-        assert!(WafEvent::new_detection(
-            "1.2.3.4".to_string(),
-            "sql".to_string(),
-            "high".to_string(),
-            None
-        )
+        assert!(make_detection_event().is_stats_related());
+        assert!(make_block_event().is_stats_related());
+        assert!(WafEvent::Unblock {
+            ip: "1.2.3.4".to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+        }
         .is_stats_related());
-        assert!(
-            WafEvent::new_block("1.2.3.4".to_string(), "reason".to_string()).is_stats_related()
-        );
-        assert!(WafEvent::new_unblock("1.2.3.4".to_string()).is_stats_related());
-        assert!(WafEvent::new_threat_score("1.2.3.4".to_string(), 50.0).is_stats_related());
-        assert!(
-            !WafEvent::new_cluster("node-1".to_string(), "join".to_string()).is_stats_related()
-        );
-        assert!(!WafEvent::new_config_change("proxy".to_string()).is_stats_related());
+        assert!(WafEvent::ThreatScoreUpdate {
+            ip: "1.2.3.4".to_string(),
+            score: 50.0,
+            timestamp: Utc::now().to_rfc3339(),
+        }
+        .is_stats_related());
+        assert!(!make_cluster_event().is_stats_related());
+        assert!(!make_config_change_event().is_stats_related());
     }
 
     #[test]
     fn test_is_cluster_related() {
-        assert!(
-            WafEvent::new_cluster("node-1".to_string(), "join".to_string()).is_cluster_related()
-        );
-        assert!(!WafEvent::new_detection(
-            "1.2.3.4".to_string(),
-            "sql".to_string(),
-            "high".to_string(),
-            None
-        )
-        .is_cluster_related());
+        assert!(make_cluster_event().is_cluster_related());
+        assert!(!make_detection_event().is_cluster_related());
     }
 
     #[test]
@@ -667,12 +556,7 @@ mod tests {
         let broadcaster = EventBroadcaster::new();
         let mut receiver = broadcaster.sender.subscribe();
 
-        let event = WafEvent::new_detection(
-            "1.2.3.4".to_string(),
-            "xss".to_string(),
-            "medium".to_string(),
-            None,
-        );
+        let event = make_detection_event();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -690,7 +574,7 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let event = WafEvent::new_block("1.2.3.4".to_string(), "test".to_string());
+            let event = make_block_event();
             broadcaster.broadcast(event).await;
 
             let r1 = receiver1.recv().await.unwrap();

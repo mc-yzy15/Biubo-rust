@@ -1,6 +1,7 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -114,6 +115,7 @@ impl Database {
         removed
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.data.lock().len()
     }

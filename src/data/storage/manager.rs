@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -9,6 +12,23 @@ use std::sync::LazyLock;
 use crate::config::settings::Settings;
 use crate::data::storage::base::Database;
 use serde_json::Value;
+
+#[cfg(feature = "plugin-system")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BanRecord {
+    pub reason: String,
+    pub expire: Option<u32>,
+    pub added_at: String,
+    pub country: String,
+    pub city: String,
+}
+
+#[cfg(feature = "plugin-system")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhitelistRecord {
+    pub remark: String,
+    pub added_at: String,
+}
 
 struct PendingLogEntry {
     host: String,
@@ -34,23 +54,6 @@ fn start_log_writer_worker(mut rx: tokio::sync::mpsc::UnboundedReceiver<PendingL
             }
         });
     });
-}
-
-#[cfg(feature = "plugin-system")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BanRecord {
-    pub reason: String,
-    pub expire: Option<u32>,
-    pub added_at: String,
-    pub country: String,
-    pub city: String,
-}
-
-#[cfg(feature = "plugin-system")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhitelistRecord {
-    pub remark: String,
-    pub added_at: String,
 }
 
 pub struct ProxyDB {

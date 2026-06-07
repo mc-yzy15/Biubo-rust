@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 
 use flate2::Compression;
 use flate2::read::{GzDecoder, ZlibDecoder};
-use flate2::write::{GzEncoder, ZlibEncoder};
+use flate2::write::ZlibEncoder;
 
 pub fn compress_json(data: &serde_json::Value) -> Vec<u8> {
     let packed = match rmp_serde::to_vec(data) {
@@ -97,44 +97,6 @@ pub fn decode_content(content: &[u8], encoding: &str) -> Vec<u8> {
                     content.to_vec()
                 }
             }
-        }
-        _ => content.to_vec(),
-    }
-}
-
-pub fn encode_content(content: &[u8], encoding: &str) -> Vec<u8> {
-    if content.is_empty() || encoding.is_empty() {
-        return content.to_vec();
-    }
-
-    match encoding.to_lowercase().as_str() {
-        "gzip" => {
-            let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
-            if encoder.write_all(content).is_ok() {
-                if let Ok(compressed) = encoder.finish() {
-                    return compressed;
-                }
-            }
-            content.to_vec()
-        }
-        "deflate" => {
-            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
-            if encoder.write_all(content).is_ok() {
-                if let Ok(compressed) = encoder.finish() {
-                    return compressed;
-                }
-            }
-            content.to_vec()
-        }
-        "br" => {
-            let mut compressed = Vec::new();
-            {
-                let mut writer = brotli::CompressorWriter::new(&mut compressed, 4096, 11, 22);
-                if writer.write_all(content).is_err() {
-                    return content.to_vec();
-                }
-            }
-            compressed
         }
         _ => content.to_vec(),
     }

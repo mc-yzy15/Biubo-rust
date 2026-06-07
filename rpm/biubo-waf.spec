@@ -3,7 +3,7 @@ Version:        1.0.0
 Release:        1%{?dist}
 Summary:        A Web Application Firewall that Thinks, Remembers, and Visualizes
 
-License:        MIT
+License:        AGPL-3.0
 URL:            https://github.com/mc-yzy15/Biubo-rust
 
 BuildRequires:  systemd

@@ -90,17 +90,25 @@ rustls-pemfile = "2"
 tokio-rustls = "0.26"
 hickory-resolver = { version = "0.24", features = ["tokio"] }
 
+# Commercial Edition dependencies (only compiled with --features commercial)
+ee-license = { path = "commercial/ee-license", optional = true }
+ratatui = { version = "0.28", optional = true }
+crossterm = { version = "0.28", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+
+lru = "0.12"
+
 [features]
 default = ["full"]
 llm-detection = []
 advanced-rules = []
-behavior-profiling = []
 cluster-mode = ["redis-support"]
 ssl-support = []
 plugin-system = []
-full = ["llm-detection", "advanced-rules", "behavior-profiling", "cluster-mode", "ssl-support", "plugin-system", "redis-support", "postgres-support"]
+full = ["llm-detection", "advanced-rules", "cluster-mode", "ssl-support", "plugin-system", "redis-support", "postgres-support"]
 redis-support = ["dep:redis"]
 postgres-support = ["dep:tokio-postgres", "dep:deadpool-postgres"]
+commercial = ["dep:ee-license", "dep:ratatui", "dep:crossterm", "dep:clap"]
 
 [dev-dependencies]
 mockito = "1"

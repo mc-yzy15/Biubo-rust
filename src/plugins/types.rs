@@ -73,33 +73,11 @@ impl PluginInstance {
         self
     }
 
-    #[cfg(feature = "plugin-system")]
-    pub fn is_enabled(&self) -> bool {
-        matches!(self.status, PluginStatus::Enabled)
-    }
-
     pub fn enable(&mut self) {
         self.status = PluginStatus::Enabled;
     }
 
     pub fn disable(&mut self) {
         self.status = PluginStatus::Disabled;
-    }
-
-    #[cfg(feature = "plugin-system")]
-    pub fn set_error(&mut self, message: String) {
-        self.status = PluginStatus::Error(message);
-    }
-}
-
-impl PluginMetadata {
-    pub fn new(name: &str, version: &str, description: &str, author: &str, plugin_type: PluginType) -> Self {
-        Self {
-            name: name.to_string(),
-            version: version.to_string(),
-            description: description.to_string(),
-            author: author.to_string(),
-            plugin_type,
-        }
     }
 }

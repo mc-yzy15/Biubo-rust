@@ -575,10 +575,12 @@ mod tests {
             },
         ];
         AppState {
-            settings: Arc::new(RwLock::new(settings)),
+            settings: Arc::new(RwLock::new(Arc::new(settings))),
             error_pages: std::collections::HashMap::new(),
             async_detection_queue: None,
             event_broadcaster: crate::api::routes::waf_events::EventBroadcaster::new(),
+            reputation_aggregator: crate::core::reputation::aggregator::ReputationAggregator::with_defaults(),
+            reputation_manager: crate::core::reputation::manager::ReputationManager::new(&[]),
         }
     }
 

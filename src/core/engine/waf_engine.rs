@@ -135,21 +135,6 @@ impl DetectionResult {
             detection_type_enum: Some("zero_day_suspected".to_string()),
         }
     }
-
-    #[cfg(feature = "llm-detection")]
-    pub fn error() -> Self {
-        DetectionResult {
-            detection_type: "error".to_string(),
-            attack_types: vec![],
-            matched_rule_id: None,
-            matched_rule_category: None,
-            behavior_score: None,
-            reputation_score: None,
-            llm_tier_used: None,
-            llm_verdict: None,
-            detection_type_enum: None,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -208,18 +193,6 @@ static HOST_COMPILED_RULES: once_cell::sync::Lazy<MokaCache<String, HostCompiled
             .time_to_idle(std::time::Duration::from_secs(3600))
             .build()
     });
-
-#[cfg(feature = "advanced-rules")]
-static GLOBAL_RULE_ENGINE: once_cell::sync::Lazy<Option<Arc<RuleEngine>>> =
-    once_cell::sync::Lazy::new(|| None);
-
-#[cfg(feature = "advanced-rules")]
-pub fn set_global_rule_engine(engine: Arc<RuleEngine>) {
-    static ENGINE_REF: once_cell::sync::Lazy<parking_lot::Mutex<Option<Arc<RuleEngine>>>> =
-        once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
-
-    *ENGINE_REF.lock() = Some(engine);
-}
 
 #[cfg(feature = "advanced-rules")]
 fn get_global_rule_engine() -> Option<Arc<RuleEngine>> {
@@ -640,7 +613,7 @@ pub async fn detect_request(
 
         if let Some(cached_verdict) = LLM_SEMANTIC_CACHE.get(&llm_cache_key) {
             tracing::debug!("LLM semantic cache hit for {}", url);
-            let detection = match serde_json::from_str::<DetectionResult>(&cached_verdict) {
+let detection = match serde_json::from_str::<DetectionResult>(&cached_verdict) {
                 Ok(d) => d,
                 Err(_) => {
                     LLM_SEMANTIC_CACHE.invalidate(&llm_cache_key);
@@ -1047,4 +1020,44 @@ pub fn quick_detect_request(
     }
 
     DetectionResult::normal()
+}
+
+/// WAF 检测缓存 GC worker
+///
+/// 定期对 DETECTION_CACHE、LLM_SEMANTIC_CACHE、HOST_COMPILED_RULES
+/// 执行 moka run_pending_tasks()，确保过期条目及时清理。
+///
+/// 尽管 moka 内部的维护线程会处理 TTL/TTI 过期，但在高吞吐场景下
+/// 主动调用 run_pending_tasks() 可保证淘汰延迟在可控范围内。
+pub fn start_cache_gc_worker() {
+    const GC_INTERVAL_SECS: u64 = 30;
+
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(GC_INTERVAL_SECS));
+
+        let before_dc = DETECTION_CACHE.entry_count();
+        DETECTION_CACHE.run_pending_tasks();
+        let after_dc = DETECTION_CACHE.entry_count();
+
+        let before_llm = LLM_SEMANTIC_CACHE.entry_count();
+        LLM_SEMANTIC_CACHE.run_pending_tasks();
+        let after_llm = LLM_SEMANTIC_CACHE.entry_count();
+
+        let before_host = HOST_COMPILED_RULES.entry_count();
+        HOST_COMPILED_RULES.run_pending_tasks();
+        let after_host = HOST_COMPILED_RULES.entry_count();
+
+        let evicted_dc = before_dc.saturating_sub(after_dc);
+        let evicted_llm = before_llm.saturating_sub(after_llm);
+        let evicted_host = before_host.saturating_sub(after_host);
+
+        if evicted_dc > 0 || evicted_llm > 0 || evicted_host > 0 {
+            tracing::debug!(
+                "Cache GC: DETECTION {}->{} (evicted {}), LLM_SEMANTIC {}->{} (evicted {}), HOST_RULES {}->{} (evicted {})",
+                before_dc, after_dc, evicted_dc,
+                before_llm, after_llm, evicted_llm,
+                before_host, after_host, evicted_host,
+            );
+        }
+    });
 }
