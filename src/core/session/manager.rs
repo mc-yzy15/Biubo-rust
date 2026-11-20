@@ -8,7 +8,7 @@ use crate::config::settings::SharedSettings;
 use crate::data::analytics::aggregator::update_analytics;
 use crate::data::storage::base::Database;
 use crate::data::storage::manager::get_db;
-use crate::utils::compression::{compress_json, decompress_json};
+use crate::utils::compression::{compress_json_to_string, decompress_json};
 use crate::utils::http_utils::get_ip_info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,7 +92,11 @@ pub fn build_log_entry(
 
 pub fn create_session(request_id: &str, host: &str, log_entry: LogEntry) {
     if SESSIONS.len() >= MAX_SESSIONS {
-        tracing::warn!("Session limit reached ({}), rejecting new session for {}", MAX_SESSIONS, request_id);
+        tracing::warn!(
+            "Session limit reached ({}), rejecting new session for {}",
+            MAX_SESSIONS,
+            request_id
+        );
         return;
     }
 
@@ -151,10 +155,9 @@ fn process_rrweb_events(events: &[serde_json::Value]) -> (Option<u64>, serde_jso
         .unwrap_or(0.0);
 
     let duration_sec = (last_ts - first_ts).abs() as u64 / 1000;
-    let compressed_rrweb = serde_json::json!(String::from_utf8_lossy(&compress_json(
-        &serde_json::json!({"events": events})
-    ))
-    .to_string());
+    let compressed_rrweb = serde_json::json!(compress_json_to_string(&serde_json::json!({
+        "events": events
+    })));
 
     (Some(duration_sec), compressed_rrweb)
 }

@@ -1,15 +1,19 @@
-#![allow(unused_imports)]
-
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use crate::api::app::create_app_with_async_detection;
 use crate::config::settings::{Settings, SharedSettings};
-use crate::core::engine::async_detection_queue::{default_worker_count, start_async_detection_workers};
-use axum::routing::get;
-use axum::Router;
+use crate::core::engine::async_detection_queue::{
+    default_worker_count, start_async_detection_workers,
+};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
+
+// These imports are only referenced inside #[cfg(feature = "ssl-support")] blocks.
+#[cfg(feature = "ssl-support")]
+use axum::routing::get;
+#[cfg(feature = "ssl-support")]
+use axum::Router;
 
 #[cfg(feature = "ssl-support")]
 use crate::services::ssl::SslManager;
@@ -21,11 +25,9 @@ use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
 #[cfg(feature = "commercial")]
-use ee_license::verifier;
-#[cfg(feature = "commercial")]
-use ee_license::error::LicenseError;
-#[cfg(feature = "commercial")]
 use ee_license::tui_setup;
+#[cfg(feature = "commercial")]
+use ee_license::verifier;
 
 mod api;
 mod cluster;
@@ -49,25 +51,37 @@ async fn main() {
 
     // ── Commercial Edition: License Verification ──────────────────────
     #[cfg(feature = "commercial")]
+    let ee_features: Option<ee_license::FeatureGate>;
+
+    #[cfg(feature = "commercial")]
     {
         tracing::info!("Commercial Edition detected, verifying license...");
 
         // Check if config.json exists → if not, launch TUI setup wizard
-        let config_path = std::env::args().find(|a| a == "--config")
-            .and_then(|_| std::env::args().nth(std::env::args().position(|a| a == "--config").unwrap_or(0) + 1))
+        let config_path = std::env::args()
+            .find(|a| a == "--config")
+            .and_then(|_| {
+                std::env::args()
+                    .nth(std::env::args().position(|a| a == "--config").unwrap_or(0) + 1)
+            })
             .unwrap_or_else(|| "./config.json".to_string());
 
-        if !std::path::Path::new(&config_path).exists() && !std::env::args().any(|a| a == "--config") {
+        if !std::path::Path::new(&config_path).exists()
+            && !std::env::args().any(|a| a == "--config")
+        {
             tracing::info!("No configuration file found, launching TUI setup wizard...");
             match tui_setup::run_setup_wizard() {
                 Ok(Some(setup)) => {
                     // Save config from wizard
-                    tracing::info!("TUI setup wizard completed. License: {:?}", setup.license_path);
+                    tracing::info!(
+                        "TUI setup wizard completed. License: {:?}",
+                        setup.license_path
+                    );
                     // TODO: Save setup result to config.json
                 }
                 Ok(None) => {
                     tracing::info!("TUI setup wizard cancelled by user.");
-                    std::process::exit(0);
+                    std::process::exit(1);
                 }
                 Err(e) => {
                     tracing::warn!("TUI setup wizard failed: {}. Continuing with defaults.", e);
@@ -76,9 +90,12 @@ async fn main() {
         }
 
         // Locate license file
-        let license_path = std::env::args().find(|a| a == "--license-file")
+        let license_path = std::env::args()
+            .find(|a| a == "--license-file")
             .and_then(|_| {
-                let pos = std::env::args().position(|a| a == "--license-file").unwrap_or(0);
+                let pos = std::env::args()
+                    .position(|a| a == "--license-file")
+                    .unwrap_or(0);
                 std::env::args().nth(pos + 1)
             })
             .or_else(|| std::env::var("BIUBO_LICENSE_PATH").ok())
@@ -96,7 +113,18 @@ async fn main() {
                     payload.edition,
                     payload.end_date.format("%Y-%m-%d")
                 );
-                eprintln!("Edition: {} (Licensed: {})", payload.edition, payload.license_id);
+                eprintln!(
+                    "Edition: {} (Licensed: {})",
+                    payload.edition, payload.license_id
+                );
+                let gate = ee_license::FeatureGate::new(&payload.features).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "Feature gate warning: {}. Some EE features may be unavailable.",
+                        e
+                    );
+                    ee_license::FeatureGate::new(&[]).expect("empty feature gate always succeeds")
+                });
+                ee_features = Some(gate);
             }
             Err(e) => {
                 tracing::error!("[{}] {}", e.error_id(), e.user_message());
@@ -111,7 +139,16 @@ async fn main() {
     plugins::init_plugins();
 
     let settings: SharedSettings = match Settings::load_and_validate() {
-        Ok(s) => Arc::new(parking_lot::RwLock::new(Arc::new(s))),
+        Ok(s) => {
+            // In commercial builds, inject the active feature gate before freezing settings.
+            #[cfg(feature = "commercial")]
+            let s = {
+                let mut s = s;
+                s.active_features = ee_features;
+                s
+            };
+            Arc::new(parking_lot::RwLock::new(Arc::new(s)))
+        }
         Err(e) => {
             tracing::error!("Configuration validation failed: {}", e);
             std::process::exit(1);
@@ -163,16 +200,22 @@ async fn main() {
 
         #[cfg(unix)]
         let sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => {
-                Box::pin(async move { sig.recv().await; }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-            }
+            Ok(mut sig) => Box::pin(async move {
+                sig.recv().await;
+            })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
             Err(e) => {
-                tracing::warn!("Failed to register SIGTERM handler ({}), using only SIGINT", e);
-                Box::pin(std::future::pending::<()>()) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                tracing::warn!(
+                    "Failed to register SIGTERM handler ({}), using only SIGINT",
+                    e
+                );
+                Box::pin(std::future::pending::<()>())
+                    as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
             }
         };
         #[cfg(not(unix))]
-        let sigterm = Box::pin(std::future::pending::<()>()) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+        let sigterm = Box::pin(std::future::pending::<()>())
+            as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
         async move {
             tokio::select! {
@@ -183,6 +226,8 @@ async fn main() {
                     tracing::info!("Received SIGTERM, shutting down gracefully...");
                 }
             }
+            // Flush all ProxyDB instances before exit
+            crate::data::storage::manager::flush_all().await;
         }
     };
 

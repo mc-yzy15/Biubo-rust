@@ -92,18 +92,12 @@ impl EventBroadcaster {
         let _ = self.sender.send(event);
     }
 
-    pub fn add_client(
-        &self,
-        permissions: Vec<String>,
-    ) -> (u64, broadcast::Receiver<WafEvent>) {
+    pub fn add_client(&self, permissions: Vec<String>) -> (u64, broadcast::Receiver<WafEvent>) {
         let client_id = self
             .next_client_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let perm_count = permissions.len();
-        self.clients.insert(
-            client_id,
-            WsClient,
-        );
+        self.clients.insert(client_id, WsClient);
         let receiver = self.sender.subscribe();
         tracing::info!(
             "WebSocket client connected: id={} with {} permissions",
@@ -225,8 +219,7 @@ async fn handle_websocket(
     permissions: Vec<String>,
     broadcaster: EventBroadcaster,
 ) {
-    let (client_id, mut event_receiver) =
-        broadcaster.add_client(permissions.clone());
+    let (client_id, mut event_receiver) = broadcaster.add_client(permissions.clone());
 
     let mut ping_interval = interval(Duration::from_secs(30));
     let mut expecting_pong = false;
@@ -386,8 +379,7 @@ mod tests {
     #[test]
     fn test_event_broadcaster_add_remove_client() {
         let broadcaster = EventBroadcaster::new();
-        let (client_id, _receiver) =
-            broadcaster.add_client(vec!["read".to_string()]);
+        let (client_id, _receiver) = broadcaster.add_client(vec!["read".to_string()]);
         broadcaster.remove_client(client_id);
     }
 

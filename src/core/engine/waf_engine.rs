@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::LazyLock;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use crate::config::settings::Settings;
 use crate::core::engine::rules::COMPILED_RULES;
@@ -30,8 +30,7 @@ static MULTIPART_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static REPEAT_CHAR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(.)\1{64,}")
-        .expect("repeated char regex pattern is a safe literal")
+    Regex::new(r"(.)\1{64,}").expect("repeated char regex pattern is a safe literal")
 });
 
 /// URL 前缀白名单：匹配这些前缀的请求直接放行，不进入检测流程
@@ -46,7 +45,9 @@ const URL_PREFIX_WHITELIST: &[&str] = &[
 /// 检查 URL 是否匹配前缀白名单
 #[inline]
 fn is_url_prefix_whitelisted(url: &str) -> bool {
-    URL_PREFIX_WHITELIST.iter().any(|prefix| url.starts_with(prefix))
+    URL_PREFIX_WHITELIST
+        .iter()
+        .any(|prefix| url.starts_with(prefix))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,7 +162,13 @@ static LLM_SEMANTIC_CACHE: once_cell::sync::Lazy<MokaCache<u64, String>> =
     });
 
 /// 计算 LLM 语义缓存 key：基于 URL、body、UA、method、headers 指纹
-fn compute_llm_cache_key(url: &str, body: &[u8], ua: &str, method: &str, headers_fingerprint: u64) -> u64 {
+fn compute_llm_cache_key(
+    url: &str,
+    body: &[u8],
+    ua: &str,
+    method: &str,
+    headers_fingerprint: u64,
+) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = ahash::AHasher::default();
     url.hash(&mut hasher);
@@ -178,7 +185,10 @@ fn compute_headers_fingerprint(headers: &HashMap<String, String>) -> u64 {
     let mut hasher = ahash::AHasher::default();
     let core_keys = ["user-agent", "referer", "content-type", "x-forwarded-for"];
     for key in &core_keys {
-        if let Some(v) = headers.get(*key).or_else(|| headers.get(&key.to_lowercase())) {
+        if let Some(v) = headers
+            .get(*key)
+            .or_else(|| headers.get(&key.to_lowercase()))
+        {
             key.hash(&mut hasher);
             v.hash(&mut hasher);
         }
@@ -555,14 +565,8 @@ pub async fn detect_request(
 
     let host_rules = get_host_rules(host);
 
-    let (is_malicious, attack_types) = check_rules(
-        url,
-        headers,
-        cookies,
-        &parsed_body,
-        Some(&host_rules),
-        true,
-    );
+    let (is_malicious, attack_types) =
+        check_rules(url, headers, cookies, &parsed_body, Some(&host_rules), true);
 
     if is_malicious {
         return DetectionResult::hacker(attack_types);
@@ -592,7 +596,7 @@ pub async fn detect_request(
         return cached_result;
     }
 
-    if settings.api_key.is_empty() {
+    if !settings.has_llm_api_key() {
         return DetectionResult::normal();
     }
 
@@ -613,7 +617,7 @@ pub async fn detect_request(
 
         if let Some(cached_verdict) = LLM_SEMANTIC_CACHE.get(&llm_cache_key) {
             tracing::debug!("LLM semantic cache hit for {}", url);
-let detection = match serde_json::from_str::<DetectionResult>(&cached_verdict) {
+            let detection = match serde_json::from_str::<DetectionResult>(&cached_verdict) {
                 Ok(d) => d,
                 Err(_) => {
                     LLM_SEMANTIC_CACHE.invalidate(&llm_cache_key);
@@ -664,17 +668,20 @@ let detection = match serde_json::from_str::<DetectionResult>(&cached_verdict) {
             }
         };
 
-        let raw_result = match tokio::time::timeout(llm_timeout, llm_call(&full_prompt, false, None, settings)).await {
-            Ok(s) => s,
-            Err(_) => {
-                tracing::error!(
-                    "LLM detection timed out for {} after {}s",
-                    url,
-                    settings.llm_timeout_secs
-                );
-                return llm_on_error();
-            }
-        };
+        let raw_result =
+            match tokio::time::timeout(llm_timeout, llm_call(&full_prompt, false, None, settings))
+                .await
+            {
+                Ok(s) => s,
+                Err(_) => {
+                    tracing::error!(
+                        "LLM detection timed out for {} after {}s",
+                        url,
+                        settings.llm_timeout_secs
+                    );
+                    return llm_on_error();
+                }
+            };
 
         let result = match extract_json(&raw_result) {
             Some(v) => v,
@@ -700,12 +707,8 @@ let detection = match serde_json::from_str::<DetectionResult>(&cached_verdict) {
 
         let llm_verdict = detection.detection_type.clone();
         let attack_types = detection.attack_types.clone();
-        let enhanced_result = DetectionResult::from_threat_signals(
-            attack_types,
-            &signals,
-            1,
-            llm_verdict.clone(),
-        );
+        let enhanced_result =
+            DetectionResult::from_threat_signals(attack_types, &signals, 1, llm_verdict.clone());
 
         // 写入 LLM 语义缓存
         if let Ok(serialized) = serde_json::to_string(&detection) {
@@ -760,26 +763,34 @@ fn get_client_log_entries(host: &str, headers: &HashMap<String, String>) -> Vec<
         .collect()
 }
 
-fn build_ip_history(host: &str, headers: &HashMap<String, String>) -> Vec<threat_signals::RequestRecord> {
+fn build_ip_history(
+    host: &str,
+    headers: &HashMap<String, String>,
+) -> Vec<threat_signals::RequestRecord> {
     let entries = get_client_log_entries(host, headers);
 
-    entries.iter().take(10).map(|entry| {
-        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let status_code = entry
-            .get("status")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(200) as u16;
-        let is_suspicious = entry
-            .get("is_suspicious")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+    entries
+        .iter()
+        .take(10)
+        .map(|entry| {
+            let url = entry
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let status_code = entry.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
+            let is_suspicious = entry
+                .get("is_suspicious")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
-        threat_signals::RequestRecord {
-            url,
-            status_code,
-            is_suspicious,
-        }
-    }).collect()
+            threat_signals::RequestRecord {
+                url,
+                status_code,
+                is_suspicious,
+            }
+        })
+        .collect()
 }
 
 fn build_history(host: &str, headers: &HashMap<String, String>) -> String {
@@ -861,7 +872,10 @@ fn truncate_headers_for_llm(headers: &HashMap<String, String>) -> HashMap<String
     const CORE_KEYS: &[&str] = &["user-agent", "referer", "content-type", "x-forwarded-for"];
     let mut result = HashMap::with_capacity(CORE_KEYS.len());
     for key in CORE_KEYS {
-        if let Some(v) = headers.get(*key).or_else(|| headers.get(&key.to_lowercase())) {
+        if let Some(v) = headers
+            .get(*key)
+            .or_else(|| headers.get(&key.to_lowercase()))
+        {
             result.insert(key.to_string(), v.clone());
         }
     }
@@ -870,7 +884,11 @@ fn truncate_headers_for_llm(headers: &HashMap<String, String>) -> HashMap<String
 
 /// LLM 输入截断：只保留前 5 个 cookies
 fn truncate_cookies_for_llm(cookies: &HashMap<String, String>) -> HashMap<String, String> {
-    cookies.iter().take(5).map(|(k, v)| (k.clone(), v.clone())).collect()
+    cookies
+        .iter()
+        .take(5)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 /// LLM 输入截断：body 超过 2KB 截断
@@ -982,14 +1000,8 @@ pub fn quick_detect_request(
 
     let host_rules = get_host_rules(host);
 
-    let (is_malicious, attack_types) = check_rules(
-        url,
-        headers,
-        cookies,
-        &parsed_body,
-        Some(&host_rules),
-        true,
-    );
+    let (is_malicious, attack_types) =
+        check_rules(url, headers, cookies, &parsed_body, Some(&host_rules), true);
 
     if is_malicious {
         return DetectionResult::hacker(attack_types);

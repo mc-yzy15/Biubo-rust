@@ -124,7 +124,6 @@ impl ThreatIntelligenceShare {
     pub fn get_blocked_ip_count(&self) -> usize {
         self.local_blocklist.len()
     }
-
 }
 
 #[cfg(test)]

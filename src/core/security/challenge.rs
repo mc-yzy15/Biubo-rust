@@ -172,7 +172,7 @@ mod tests {
         let secret = "test_secret_key";
 
         let token = get_challenge_token(ip, user_agent, secret);
-        
+
         let parts: Vec<&str> = token.split('|').collect();
         assert_eq!(parts.len(), 3);
         assert_eq!(parts[1].len(), NONCE_LENGTH);
@@ -188,7 +188,7 @@ mod tests {
         let secret = "test_secret_key";
 
         let token = get_challenge_token(ip, user_agent, secret);
-        
+
         let status1 = verify_challenge_token(Some(&token), ip, user_agent, secret);
         assert_eq!(status1, ChallengeStatus::Valid);
 

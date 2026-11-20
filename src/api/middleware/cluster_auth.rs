@@ -7,7 +7,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::api::app::AppState;
-use crate::utils::crypto::constant_time_compare;
+use crate::utils::crypto::verify_secret;
 
 pub async fn cluster_api_auth_middleware(
     State(state): State<Arc<AppState>>,
@@ -35,7 +35,7 @@ pub async fn cluster_api_auth_middleware(
 
     let is_valid = {
         let settings = state.settings.read();
-        constant_time_compare(provided_secret.as_bytes(), settings.cluster_shared_secret.as_bytes())
+        verify_secret(&provided_secret, &settings.cluster_shared_secret)
     };
 
     if is_valid {

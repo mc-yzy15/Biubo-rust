@@ -364,7 +364,9 @@ impl ReputationProvider for IPInfoProvider {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let privacy_flag = hosting || proxy || tor || vpn;
+        // privacy 仅反映匿名化服务（vpn）本身，不能把 proxy/tor/hosting
+        // 重复计入，否则会在 calculate_risk_score 中叠加计分。
+        let privacy_flag = vpn;
 
         let (score, is_listed) = Self::calculate_risk_score(hosting, privacy_flag, proxy, tor);
 

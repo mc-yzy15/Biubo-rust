@@ -151,7 +151,10 @@ impl Metrics {
 
         out.push_str("# HELP biubo_requests_blocked Total blocked requests\n");
         out.push_str("# TYPE biubo_requests_blocked counter\n");
-        out.push_str(&format!("biubo_requests_blocked {}\n", snap.requests_blocked));
+        out.push_str(&format!(
+            "biubo_requests_blocked {}\n",
+            snap.requests_blocked
+        ));
 
         out.push_str("# HELP biubo_requests_passed Total passed requests\n");
         out.push_str("# TYPE biubo_requests_passed counter\n");
@@ -178,14 +181,14 @@ impl Metrics {
 
         out.push_str("# HELP biubo_llm_tokens_total Total LLM tokens consumed\n");
         out.push_str("# TYPE biubo_llm_tokens_total counter\n");
-        out.push_str(&format!("biubo_llm_tokens_total {}\n", snap.llm_tokens_total));
+        out.push_str(&format!(
+            "biubo_llm_tokens_total {}\n",
+            snap.llm_tokens_total
+        ));
 
         out.push_str("# HELP biubo_llm_cache_hits LLM semantic cache hits\n");
         out.push_str("# TYPE biubo_llm_cache_hits counter\n");
-        out.push_str(&format!(
-            "biubo_llm_cache_hits {}\n",
-            snap.llm_cache_hits
-        ));
+        out.push_str(&format!("biubo_llm_cache_hits {}\n", snap.llm_cache_hits));
 
         out.push_str("# HELP biubo_llm_cache_misses LLM semantic cache misses\n");
         out.push_str("# TYPE biubo_llm_cache_misses counter\n");
@@ -196,10 +199,7 @@ impl Metrics {
 
         out.push_str("# HELP biubo_llm_dedup_hits LLM in-flight dedup hits\n");
         out.push_str("# TYPE biubo_llm_dedup_hits counter\n");
-        out.push_str(&format!(
-            "biubo_llm_dedup_hits {}\n",
-            snap.llm_dedup_hits
-        ));
+        out.push_str(&format!("biubo_llm_dedup_hits {}\n", snap.llm_dedup_hits));
 
         out.push_str("# HELP biubo_waf_regex_matches WAF regex match count\n");
         out.push_str("# TYPE biubo_waf_regex_matches counter\n");
@@ -210,10 +210,7 @@ impl Metrics {
 
         out.push_str("# HELP biubo_waf_cache_hits WAF detection cache hits\n");
         out.push_str("# TYPE biubo_waf_cache_hits counter\n");
-        out.push_str(&format!(
-            "biubo_waf_cache_hits {}\n",
-            snap.waf_cache_hits
-        ));
+        out.push_str(&format!("biubo_waf_cache_hits {}\n", snap.waf_cache_hits));
 
         out.push_str("# HELP biubo_waf_cache_misses WAF detection cache misses\n");
         out.push_str("# TYPE biubo_waf_cache_misses counter\n");
@@ -244,9 +241,7 @@ impl Metrics {
             snap.challenge_tokens_issued
         ));
 
-        out.push_str(
-            "# HELP biubo_challenge_tokens_verified Challenge tokens verified\n",
-        );
+        out.push_str("# HELP biubo_challenge_tokens_verified Challenge tokens verified\n");
         out.push_str("# TYPE biubo_challenge_tokens_verified counter\n");
         out.push_str(&format!(
             "biubo_challenge_tokens_verified {}\n",
@@ -262,10 +257,7 @@ impl Metrics {
 
         out.push_str("# HELP biubo_reputation_bans IPs banned by reputation\n");
         out.push_str("# TYPE biubo_reputation_bans counter\n");
-        out.push_str(&format!(
-            "biubo_reputation_bans {}\n",
-            snap.reputation_bans
-        ));
+        out.push_str(&format!("biubo_reputation_bans {}\n", snap.reputation_bans));
 
         // Latency histogram
         out.push_str("# HELP biubo_request_latency_ns Request latency buckets (ns)\n");

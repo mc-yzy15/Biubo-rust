@@ -53,7 +53,10 @@ pub struct ConfigSync {
 }
 
 impl ConfigSync {
-    pub async fn receive_config_update(&self, update: ConfigUpdate) -> Result<ConfigSyncResponse, String> {
+    pub async fn receive_config_update(
+        &self,
+        update: ConfigUpdate,
+    ) -> Result<ConfigSyncResponse, String> {
         tracing::info!(
             "[ConfigSync] Receiving config update: id={}, type={}, source={}",
             update.id,
@@ -63,10 +66,14 @@ impl ConfigSync {
 
         match self.apply_config_update(&update).await {
             Ok(_) => {
-                tracing::info!("[ConfigSync] Config update applied successfully: {}", update.id);
+                tracing::info!(
+                    "[ConfigSync] Config update applied successfully: {}",
+                    update.id
+                );
 
                 let node_id = self.manager.node_id.clone();
-                self.send_ack(update.id.clone(), node_id.clone(), true).await;
+                self.send_ack(update.id.clone(), node_id.clone(), true)
+                    .await;
 
                 Ok(ConfigSyncResponse {
                     status: "success".to_string(),
@@ -75,10 +82,15 @@ impl ConfigSync {
                 })
             }
             Err(e) => {
-                tracing::error!("[ConfigSync] Failed to apply config update {}: {}", update.id, e);
+                tracing::error!(
+                    "[ConfigSync] Failed to apply config update {}: {}",
+                    update.id,
+                    e
+                );
 
                 let node_id = self.manager.node_id.clone();
-                self.send_ack(update.id.clone(), node_id.clone(), false).await;
+                self.send_ack(update.id.clone(), node_id.clone(), false)
+                    .await;
 
                 Err(format!("Failed to apply config update: {}", e))
             }
@@ -88,15 +100,24 @@ impl ConfigSync {
     async fn apply_config_update(&self, update: &ConfigUpdate) -> Result<(), String> {
         match update.update_type.as_str() {
             "rules" => {
-                tracing::info!("[ConfigSync] Applying rules update: {} bytes", update.payload.len());
+                tracing::info!(
+                    "[ConfigSync] Applying rules update: {} bytes",
+                    update.payload.len()
+                );
                 Ok(())
             }
             "blacklist" => {
-                tracing::info!("[ConfigSync] Applying blacklist update: {} bytes", update.payload.len());
+                tracing::info!(
+                    "[ConfigSync] Applying blacklist update: {} bytes",
+                    update.payload.len()
+                );
                 Ok(())
             }
             "ratelimit" => {
-                tracing::info!("[ConfigSync] Applying ratelimit update: {} bytes", update.payload.len());
+                tracing::info!(
+                    "[ConfigSync] Applying ratelimit update: {} bytes",
+                    update.payload.len()
+                );
                 Ok(())
             }
             "settings" => {
@@ -108,13 +129,19 @@ impl ConfigSync {
                 if let Some(port) = new_settings_val.get("waf_port").and_then(|v| v.as_u64()) {
                     settings.waf_port = port as u16;
                 }
-                if let Some(proxy_map) = new_settings_val.get("proxy_map").and_then(|v| v.as_object()) {
+                if let Some(proxy_map) = new_settings_val
+                    .get("proxy_map")
+                    .and_then(|v| v.as_object())
+                {
                     settings.proxy_map = proxy_map
                         .iter()
                         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                         .collect();
                 }
-                if let Some(path) = new_settings_val.get("dashboard_path").and_then(|v| v.as_str()) {
+                if let Some(path) = new_settings_val
+                    .get("dashboard_path")
+                    .and_then(|v| v.as_str())
+                {
                     settings.dashboard_path = path.to_string();
                 }
                 settings.save_config();
@@ -122,9 +149,7 @@ impl ConfigSync {
                 tracing::info!("[ConfigSync] Settings applied from primary node");
                 Ok(())
             }
-            other => {
-                Err(format!("Unknown config update type: {}", other))
-            }
+            other => Err(format!("Unknown config update type: {}", other)),
         }
     }
 
@@ -278,7 +303,10 @@ mod tests {
 
         let settings_read = settings.read();
         assert_eq!(settings_read.waf_port, 8080);
-        assert_eq!(settings_read.proxy_map.get("example.com").unwrap(), "http://backend:80");
+        assert_eq!(
+            settings_read.proxy_map.get("example.com").unwrap(),
+            "http://backend:80"
+        );
         assert_eq!(settings_read.dashboard_path, "/admin");
     }
 
@@ -317,7 +345,8 @@ mod tests {
         let ack = ConfigUpdateAck::new("update-1".to_string(), "node-1".to_string());
         sync.pending_acks.insert("update-1".to_string(), ack);
 
-        sync.send_ack("update-1".to_string(), "node-1".to_string(), true).await;
+        sync.send_ack("update-1".to_string(), "node-1".to_string(), true)
+            .await;
 
         let entry = sync.pending_acks.get("update-1").unwrap();
         assert!(entry.value().acknowledged);
@@ -346,9 +375,8 @@ mod tests {
                 source_node_id: format!("node-{}", i),
             };
 
-            let handle = tokio::spawn(async move {
-                sync_clone.receive_config_update(update).await
-            });
+            let handle =
+                tokio::spawn(async move { sync_clone.receive_config_update(update).await });
             handles.push(handle);
         }
 

@@ -35,6 +35,8 @@ Subscription licenses grant you the right to use the latest version of Biubo WAF
 | **半年套餐 (Half-year)** | ¥1,499 / 6mo · $249 / 6mo | ~16% | 一次买 6 个月 |
 | **年度套餐 (Annual)** | ¥2,499 / yr · $399 / yr | ~30% | 一次买 12 个月，**最受欢迎** |
 
+For a full capability breakdown by edition, see [EDITION-BOUNDARY.md](EDITION-BOUNDARY.md).
+
 Subscription includes:
 - ✔️ Latest Biubo WAF release + all updates during the term
 - ✔️ Email support (best-effort, business hours, GMT+8)

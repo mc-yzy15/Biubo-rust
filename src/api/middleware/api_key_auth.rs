@@ -39,8 +39,7 @@ pub async fn api_key_auth_middleware(
     };
 
     if !is_active {
-        return ApiResponse::<()>::error("API key is inactive.")
-            .with_status(StatusCode::FORBIDDEN);
+        return ApiResponse::<()>::error("API key is inactive.").with_status(StatusCode::FORBIDDEN);
     }
 
     next.run(request).await

@@ -108,7 +108,6 @@ fn build_app_internal(
     let dashboard_protected_routes = routes::dashboard::protected_router(state.clone());
     let init_routes = routes::init::router(state.clone());
     let proxy_routes = routes::proxy::router(state.clone());
-    let plugin_routes = routes::plugins::router(state.clone());
     let waf_api_routes = routes::waf_api::router(state.clone());
     let waf_events_route = routes::waf_events::websocket_events_handler(state.clone());
 
@@ -133,6 +132,7 @@ fn build_app_internal(
     let dashboard_auth_state = state.clone();
     let dashboard_protected_with_auth = Router::new()
         .merge(dashboard_protected_routes)
+        .merge(routes::plugins::router(state.clone()))
         .layer(from_fn(
             move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
                 let state = dashboard_auth_state.clone();
@@ -207,7 +207,6 @@ fn build_app_internal(
         .merge(dashboard_protected_with_auth)
         .merge(init_routes)
         .merge(proxy_routes)
-        .merge(plugin_routes)
         .merge(cluster_routes)
         .nest("/api/waf/v1", waf_api_with_auth)
         .merge(waf_events_route)

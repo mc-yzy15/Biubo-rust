@@ -1,4 +1,3 @@
-
 #[cfg(feature = "ssl-support")]
 use std::path::PathBuf;
 
@@ -34,5 +33,3 @@ pub fn build_acme_tls_config(
     info!("ACME TLS configuration created for domains: {:?}", domains);
     Ok((server_config, state))
 }
-
-

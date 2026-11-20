@@ -320,7 +320,8 @@ mod tests {
     #[test]
     fn test_springshell() {
         let pattern = &COMPILED_RULES["rce"];
-        assert!(pattern.is_match("class.module.classLoader.resources.context.parent.pipeline.first.pattern"));
+        assert!(pattern
+            .is_match("class.module.classLoader.resources.context.parent.pipeline.first.pattern"));
     }
 
     #[test]

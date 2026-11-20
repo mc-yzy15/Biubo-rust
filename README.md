@@ -108,15 +108,53 @@ Biubo WAF uses a file-based configuration system. Configuration files are stored
 ### Default Settings
 
 - **WAF Port**: `8080` (configurable via `WAF_PORT` env var)
-- **Dashboard**: Access at `http://localhost:8080/dashboard`
+- **Dashboard**: Access at `http://localhost:8080/biubo-cgi`
 - **Log Level**: `info` (configurable via `RUST_LOG` env var)
+
+### Configuration File
+
+On first run, Biubo WAF generates `config.json` in the project root to persist settings (port, proxy map, SSL, LLM, cluster, etc.). Sensitive fields (passwords, API keys, secrets) are auto-hashed with bcrypt before saving.
 
 ### Environment Variables
 
-| Variable   | Description            | Default |
-| :--------- | :--------------------- | :------ |
-| `WAF_PORT` | Port for the WAF proxy | `8080`  |
-| `RUST_LOG` | Logging level          | `info`  |
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `WAF_PORT` | WAF proxy port | `8080` |
+| `WAF_DASHBOARD_PASSWORD` | Dashboard login password | auto-generated |
+| `WAF_DASHBOARD_PATH` | Dashboard URL path | `/biubo-cgi` |
+| `WAF_CORS_ORIGINS` | Allowed CORS origins (JSON array) | `["http://ip.zplb.org.cn:7000"]` |
+| `WAF_API_KEY` | Legacy LLM API key | — |
+| `WAF_LLM_MODEL` | Default LLM model | `qwen-plus` |
+| `WAF_LLM_BASE_URL` | Default LLM API base URL | dashscope |
+| `WAF_LLM_QUICK_MODEL` | Tier 1 quick detection model | `qwen-turbo` |
+| `WAF_LLM_QUICK_API_KEY` | Tier 1 LLM API key | — |
+| `WAF_LLM_DEEP_MODEL` | Tier 2 deep analysis model | `qwen-plus` |
+| `WAF_LLM_DEEP_API_KEY` | Tier 2 LLM API key | — |
+| `WAF_RATE_LIMIT` | Per-IP rate limit (req/s) | `15` |
+| `WAF_BAN_THRESHOLD` | Rate ban threshold | `30` |
+| `WAF_BAN_DURATION` | Rate ban duration (minutes) | `60` |
+| `WAF_CC_URL_THRESHOLD` | CC URL diversity threshold | `50` |
+| `WAF_CC_UA_THRESHOLD` | CC UA diversity threshold | `10` |
+| `WAF_CC_STRIKE_LIMIT` | CC strike limit before ban | `3` |
+| `WAF_GRAY_ZONE_LIMIT` | Gray-zone violation limit | `5` |
+| `WAF_SESSION_TIMEOUT` | Session timeout (minutes) | `20` |
+| `WAF_CACHE_TTL` | Detection cache TTL (seconds) | `3600` |
+| `STORAGE_DRIVER` | Storage backend (`msgpack`/`redis`/`postgresql`) | `msgpack` |
+| `STORAGE_REDIS_URL` | Redis connection URL | — |
+| `STORAGE_POSTGRES_URL` | PostgreSQL connection URL | — |
+| `SSL_ENABLED` | Enable auto-TLS | `false` |
+| `SSL_DOMAINS` | TLS domains (comma-separated) | — |
+| `SSL_ACME_EMAIL` | ACME registration email | — |
+| `SSL_PORT` | HTTPS listen port | `443` |
+| `WAF_LOG_AUTO_DELETE` | Auto-delete old logs | `false` |
+| `WAF_LOG_RETENTION_DAYS` | Log retention days | `30` |
+| `WAF_TRUST_HEADERS` | Trust IP headers from proxies | `true` |
+| `WAF_IP_HEADER_ORDER` | IP header extraction order (JSON array) | `["CF-Connecting-IP","X-Real-IP","X-Forwarded-For"]` |
+| `WAF_INTERNAL_API_KEY` | Internal API key | auto-generated |
+| `WAF_CLUSTER_SHARED_SECRET` | Cluster shared secret | auto-generated |
+| `RUST_LOG` | Logging level | `info` |
+
+See [.env.example](.env.example) for the full list.
 
 ---
 
@@ -228,6 +266,28 @@ cargo build --release
 # Run the WAF
 cargo run --release
 ```
+
+The default build enables all features (`full`). To build with a subset:
+
+```bash
+# Minimal build (core WAF only, no LLM/cluster/SSL/plugins)
+cargo build --release --no-default-features
+
+# Specific features
+cargo build --release --no-default-features --features "llm-detection,ssl-support"
+```
+
+| Feature | Description |
+| :--- | :--- |
+| `full` (default) | All features below enabled |
+| `llm-detection` | AI-powered threat detection |
+| `advanced-rules` | Advanced rule engine |
+| `cluster-mode` | Cluster support (implies `redis-support`) |
+| `ssl-support` | Auto-TLS via ACME |
+| `plugin-system` | Plugin loader & registry |
+| `redis-support` | Redis storage backend |
+| `postgres-support` | PostgreSQL storage backend |
+| `commercial` | Enterprise Edition (requires license) |
 
 #### Option 2: Docker Deployment
 

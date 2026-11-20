@@ -1,4 +1,3 @@
-
 pub mod loader;
 pub mod registry;
 pub mod types;
@@ -41,7 +40,10 @@ pub async fn trigger_exporters(entry: serde_json::Value) {
     // For now, this is a stub implementation.
     // In a full implementation, this would iterate through registered exporters
     // and call each one with the entry.
-    tracing::debug!("Triggering exporters for entry: {:?}", entry.get("request_id"));
+    tracing::debug!(
+        "Triggering exporters for entry: {:?}",
+        entry.get("request_id")
+    );
 
     // Placeholder: log the trigger for debugging
     if let Some(request_id) = entry.get("request_id").and_then(|v| v.as_str()) {

@@ -46,11 +46,19 @@ impl PluginLoader {
                         if path.extension().and_then(|s| s.to_str()) == Some("json") {
                             match self.load_plugin_file(&path) {
                                 Ok(plugin) => {
-                                    tracing::info!("Loaded plugin: {} ({})", plugin.metadata.name, plugin.metadata.version);
+                                    tracing::info!(
+                                        "Loaded plugin: {} ({})",
+                                        plugin.metadata.name,
+                                        plugin.metadata.version
+                                    );
                                     plugins.push(plugin);
                                 }
                                 Err(e) => {
-                                    tracing::error!("Failed to load plugin from {}: {}", path.display(), e);
+                                    tracing::error!(
+                                        "Failed to load plugin from {}: {}",
+                                        path.display(),
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -62,17 +70,21 @@ impl PluginLoader {
             }
         }
 
-        tracing::info!("Scanned {} plugins from {} directories", plugins.len(), self.plugin_dirs.len());
+        tracing::info!(
+            "Scanned {} plugins from {} directories",
+            plugins.len(),
+            self.plugin_dirs.len()
+        );
         plugins
     }
 
     #[cfg(feature = "plugin-system")]
     fn load_plugin_file(&self, path: &Path) -> Result<PluginInstance, String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
-        let file_config: PluginFileConfig = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+        let file_config: PluginFileConfig =
+            serde_json::from_str(&content).map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
         self.validate_plugin(&file_config)?;
 

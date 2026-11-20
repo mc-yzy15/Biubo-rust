@@ -131,9 +131,7 @@ impl ReputationAggregator {
 
     pub fn normalize_score(provider: &str, raw_score: f64) -> f64 {
         match provider {
-            "AbuseIPDB" => {
-                (raw_score * 100.0).clamp(0.0, 100.0)
-            }
+            "AbuseIPDB" => (raw_score * 100.0).clamp(0.0, 100.0),
             "GreyNoise" => {
                 let score_100 = raw_score * 100.0;
                 if score_100 >= 99.0 {
@@ -148,9 +146,7 @@ impl ReputationAggregator {
                     10.0
                 }
             }
-            "VirusTotal" => {
-                (raw_score * 100.0).clamp(0.0, 100.0)
-            }
+            "VirusTotal" => (raw_score * 100.0).clamp(0.0, 100.0),
             "Spamhaus" => {
                 if raw_score > 0.0 {
                     100.0
@@ -165,9 +161,7 @@ impl ReputationAggregator {
                     0.0
                 }
             }
-            _ => {
-                (raw_score * 100.0).clamp(0.0, 100.0)
-            }
+            _ => (raw_score * 100.0).clamp(0.0, 100.0),
         }
     }
 
@@ -278,33 +272,63 @@ mod aggregator_tests {
 
     #[test]
     fn test_normalize_abuseipdb() {
-        assert!((ReputationAggregator::normalize_score("AbuseIPDB", 0.8) - 80.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("AbuseIPDB", 0.0) - 0.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("AbuseIPDB", 1.0) - 100.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("AbuseIPDB", 0.45) - 45.0).abs() < f64::EPSILON);
+        assert!(
+            (ReputationAggregator::normalize_score("AbuseIPDB", 0.8) - 80.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("AbuseIPDB", 0.0) - 0.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("AbuseIPDB", 1.0) - 100.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("AbuseIPDB", 0.45) - 45.0).abs() < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_normalize_greynoise() {
-        assert!((ReputationAggregator::normalize_score("GreyNoise", 1.0) - 100.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("GreyNoise", 0.8) - 60.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("GreyNoise", 0.5) - 50.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("GreyNoise", 0.01) - 20.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("GreyNoise", 0.0) - 10.0).abs() < f64::EPSILON);
+        assert!(
+            (ReputationAggregator::normalize_score("GreyNoise", 1.0) - 100.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("GreyNoise", 0.8) - 60.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("GreyNoise", 0.5) - 50.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("GreyNoise", 0.01) - 20.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("GreyNoise", 0.0) - 10.0).abs() < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_normalize_virustotal() {
-        assert!((ReputationAggregator::normalize_score("VirusTotal", 0.75) - 75.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("VirusTotal", 0.0) - 0.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("VirusTotal", 1.0) - 100.0).abs() < f64::EPSILON);
+        assert!(
+            (ReputationAggregator::normalize_score("VirusTotal", 0.75) - 75.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("VirusTotal", 0.0) - 0.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("VirusTotal", 1.0) - 100.0).abs() < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_normalize_spamhaus() {
-        assert!((ReputationAggregator::normalize_score("Spamhaus", 1.0) - 100.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("Spamhaus", 0.9) - 100.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("Spamhaus", 0.0) - 0.0).abs() < f64::EPSILON);
+        assert!(
+            (ReputationAggregator::normalize_score("Spamhaus", 1.0) - 100.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("Spamhaus", 0.9) - 100.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("Spamhaus", 0.0) - 0.0).abs() < f64::EPSILON
+        );
     }
 
     #[test]
@@ -316,15 +340,19 @@ mod aggregator_tests {
 
     #[test]
     fn test_normalize_unknown_provider() {
-        assert!((ReputationAggregator::normalize_score("UnknownProvider", 0.5) - 50.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("CustomProvider", 0.75) - 75.0).abs() < f64::EPSILON);
+        assert!(
+            (ReputationAggregator::normalize_score("UnknownProvider", 0.5) - 50.0).abs()
+                < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("CustomProvider", 0.75) - 75.0).abs()
+                < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_weighted_average_single_provider() {
-        let results = vec![
-            ("AbuseIPDB".to_string(), 80.0, 0.30),
-        ];
+        let results = vec![("AbuseIPDB".to_string(), 80.0, 0.30)];
         let avg = ReputationAggregator::compute_weighted_average(&results);
         assert!((avg - 80.0).abs() < f64::EPSILON);
     }
@@ -370,7 +398,8 @@ mod aggregator_tests {
             .match_query("ipAddress=1.2.3.4")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "data": {
                     "ipAddress": "1.2.3.4",
@@ -379,7 +408,8 @@ mod aggregator_tests {
                     "lastReportedAt": "2024-01-01T00:00:00Z"
                 }
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -411,7 +441,8 @@ mod aggregator_tests {
             .match_query("ipAddress=5.6.7.8")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "data": {
                     "ipAddress": "5.6.7.8",
@@ -420,7 +451,8 @@ mod aggregator_tests {
                     "lastReportedAt": "2024-01-01T00:00:00Z"
                 }
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -455,7 +487,8 @@ mod aggregator_tests {
             .match_query("ipAddress=9.10.11.12")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "data": {
                     "ipAddress": "9.10.11.12",
@@ -464,7 +497,8 @@ mod aggregator_tests {
                     "lastReportedAt": "2024-01-01T00:00:00Z"
                 }
             }
-            "#)
+            "#,
+            )
             .expect_at_least(2)
             .create_async()
             .await;
@@ -511,7 +545,9 @@ mod aggregator_tests {
             cached_at: now - Duration::from_secs(3700),
             expires_at: now - Duration::from_secs(100),
         };
-        aggregator.cache.insert("2.2.2.2".to_string(), expired_entry);
+        aggregator
+            .cache
+            .insert("2.2.2.2".to_string(), expired_entry);
 
         assert_eq!(aggregator.cache_size(), 2);
 
@@ -594,7 +630,8 @@ mod aggregator_tests {
             .match_query("ipAddress=7.8.9.10")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "data": {
                     "ipAddress": "7.8.9.10",
@@ -603,7 +640,8 @@ mod aggregator_tests {
                     "lastReportedAt": "2024-01-01T00:00:00Z"
                 }
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -611,14 +649,16 @@ mod aggregator_tests {
             .mock("GET", "/v3/community/7.8.9.10")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"
+            .with_body(
+                r#"
             {
                 "ip": "7.8.9.10",
                 "verdict": "malicious",
                 "noise": true,
                 "spoofable": false
             }
-            "#)
+            "#,
+            )
             .create_async()
             .await;
 
@@ -667,9 +707,15 @@ mod aggregator_tests {
 
     #[test]
     fn test_score_clamping() {
-        assert!((ReputationAggregator::normalize_score("AbuseIPDB", 1.5) - 100.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("AbuseIPDB", -0.5) - 0.0).abs() < f64::EPSILON);
-        assert!((ReputationAggregator::normalize_score("VirusTotal", 2.0) - 100.0).abs() < f64::EPSILON);
+        assert!(
+            (ReputationAggregator::normalize_score("AbuseIPDB", 1.5) - 100.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("AbuseIPDB", -0.5) - 0.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (ReputationAggregator::normalize_score("VirusTotal", 2.0) - 100.0).abs() < f64::EPSILON
+        );
     }
 
     fn create_test_score(ip: &str, score: f64) -> UnifiedReputationScore {

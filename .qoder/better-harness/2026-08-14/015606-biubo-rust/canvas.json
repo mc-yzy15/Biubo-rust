@@ -1,0 +1,374 @@
+{
+  "schemaVersion": 2,
+  "summary": {
+    "evidenceMode": "session-limited",
+    "evidenceBoundary": {
+      "manifest": {
+        "schemaVersion": 2,
+        "sourceFingerprint": "659a300dbd49ee99",
+        "adapterVersion": "qoder-task-loop-source-v2",
+        "platform": "qoder",
+        "selection": {
+          "strategy": "all-eligible",
+          "eligibleCount": 4,
+          "analyzedCount": 4,
+          "confidence": "High"
+        }
+      },
+      "episodeCoverage": {
+        "episodeCount": 0,
+        "editedEpisodeCount": 0,
+        "closedEpisodeCount": 0,
+        "recoveredEpisodeCount": 0
+      },
+      "deliveryEvidenceLevels": [],
+      "sourceGaps": []
+    },
+    "semanticFacets": {
+      "schemaVersion": 1,
+      "status": "supplementary",
+      "entries": [
+        {
+          "id": "session-insight:source-coverage",
+          "kind": "redacted-summary",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "source-coverage",
+            "High"
+          ],
+          "summary": "Analyzed 4 of 4 sessions; 2/6 enabled source roots exist. Use this as the current workspace evidence boundary for final insight cards.",
+          "evidenceRefs": [],
+          "modelVersion": "session-insights-v1"
+        },
+        {
+          "id": "session-insight:validation-behavior",
+          "kind": "redacted-summary",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "validation-behavior",
+            "Low"
+          ],
+          "summary": "No validation command category was observed in the analyzed session sample. Inspect more sessions or add explicit validation guidance before claiming validation-after-edit behavior.",
+          "evidenceRefs": [],
+          "modelVersion": "session-insights-v1"
+        },
+        {
+          "id": "session-insight:post-edit-validation",
+          "kind": "rework-correction",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "post-edit-validation",
+            "Low"
+          ],
+          "summary": "No edit event was observed in the analyzed sample. Inspect more sessions before making claims about edit or validation habits.",
+          "evidenceRefs": [],
+          "modelVersion": "session-insights-v1"
+        },
+        {
+          "id": "session-insight:execution-friction",
+          "kind": "friction-taxonomy",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "execution-friction",
+            "Low"
+          ],
+          "summary": "No strong execution friction signal in the analyzed sample. Keep friction claims narrow unless additional failed commands, rejected actions, or warnings are inspected.",
+          "evidenceRefs": [],
+          "modelVersion": "session-insights-v1"
+        },
+        {
+          "id": "session-insight:tool-mix",
+          "kind": "redacted-summary",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "tool-mix",
+            "High"
+          ],
+          "summary": "Most observed tool: Read (40). Use this as workflow evidence, then inspect bounded sessions before claiming user intent.",
+          "evidenceRefs": [
+            {
+              "kind": "execution-transcript",
+              "id": "session-insight-5-1",
+              "type": "assistant",
+              "line": 1
+            }
+          ],
+          "modelVersion": "session-insights-v1"
+        },
+        {
+          "id": "session-insight:session-usage-efficiency",
+          "kind": "redacted-summary",
+          "episodeRef": null,
+          "status": "candidate",
+          "labels": [
+            "session-usage-efficiency",
+            "High"
+          ],
+          "summary": "本次分析覆盖 4 个会话，未发现达到阈值的活跃长会话。 这些活动证据只描述投入；当前 token 或 credit 证据不足，不能据此推断模型偏好、质量或节省。",
+          "evidenceRefs": [],
+          "modelVersion": "session-insights-v1"
+        }
+      ]
+    },
+    "learningCapture": {
+      "schemaVersion": 1,
+      "state": "N/A",
+      "summary": "暂不适用——需要两个可比的观察窗口和一次改进对比。",
+      "interventions": []
+    },
+    "aiAgentPractice": {
+      "inspectedSurfaces": [
+        "Rules",
+        "Skills",
+        "Hooks",
+        "Workflows",
+        "Plugins"
+      ],
+      "coverageRows": [
+        {
+          "surface": "Rules",
+          "scopes": [
+            "Project"
+          ],
+          "count": 1,
+          "paths": [
+            "AGENTS.md"
+          ]
+        },
+        {
+          "surface": "Skills",
+          "scopes": [
+            "Global",
+            "Plugin"
+          ],
+          "count": 58,
+          "paths": [
+            "~/.agents/skills/algorithmic-art/SKILL.md",
+            "~/.agents/skills/baoyu-danger-x-to-markdown/SKILL.md",
+            "~/.agents/skills/baoyu-format-markdown/SKILL.md",
+            "~/.agents/skills/baoyu-markdown-to-html/SKILL.md",
+            "~/.agents/skills/baoyu-url-to-markdown/SKILL.md",
+            "~/.agents/skills/brand-guidelines/SKILL.md",
+            "~/.agents/skills/canvas-design/SKILL.md",
+            "~/.agents/skills/caveman/SKILL.md",
+            "~/.agents/skills/claude-api/SKILL.md",
+            "~/.agents/skills/design-an-interface/SKILL.md",
+            "~/.agents/skills/diagnose/SKILL.md",
+            "~/.agents/skills/doc-coauthoring/SKILL.md"
+          ]
+        },
+        {
+          "surface": "Hooks",
+          "scopes": [
+            "Plugin"
+          ],
+          "count": 2,
+          "paths": [
+            "~/.qoder/plugins/cache/qoder-bundler/security-scan/.qoder-plugin/qoder-hooks.json"
+          ]
+        },
+        {
+          "surface": "Workflows",
+          "scopes": [
+            "Project"
+          ],
+          "count": 8,
+          "paths": [
+            ".github/workflows/_build-release.yml",
+            ".github/workflows/ci-lint.yml",
+            ".github/workflows/docker-compose-test.yml",
+            ".github/workflows/release-monthly.yml",
+            ".github/workflows/release-nightly.yml",
+            ".github/workflows/release-push.yml",
+            ".github/workflows/release-stable.yml",
+            ".github/workflows/release-weekly.yml"
+          ]
+        },
+        {
+          "surface": "Plugins",
+          "scopes": [
+            "Plugin"
+          ],
+          "count": 3,
+          "paths": [
+            "~/.qoder/plugins/cache/qoder-bundler/better-harness/.qoder-plugin/plugin.json",
+            "~/.qoder/plugins/cache/qoder-bundler/qoder-create-plugin",
+            "~/.qoder/plugins/cache/qoder-bundler/security-scan/.qoder-plugin/plugin.json"
+          ]
+        },
+        {
+          "surface": "Commands",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "Custom Agents",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "MCP",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "Memories",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        }
+      ],
+      "repositorySourceRows": [],
+      "memoryDetails": {
+        "contentPolicy": "metadata-only",
+        "scanState": "scanned-empty",
+        "scopeCounts": [],
+        "integrity": {
+          "status": "reviewed",
+          "titleCount": 0,
+          "reviewedTitleCount": 0,
+          "truncated": false,
+          "exactCollisionGroups": 0,
+          "similarityCandidates": 0
+        }
+      }
+    },
+    "usageActivity": {
+      "schemaVersion": 2,
+      "dateBasis": "UTC",
+      "measurementBasis": "session-starts-active-estimate-model-active-session-days-skill-invocations-and-loads",
+      "truncated": false,
+      "dates": [
+        "2026-08-13"
+      ],
+      "sessions": {
+        "total": 4,
+        "starts": [
+          4
+        ],
+        "activeMinutes": [
+          13.1
+        ]
+      },
+      "models": [],
+      "skills": []
+    },
+    "usageEfficiency": {
+      "schemaVersion": 2,
+      "selection": {
+        "strategy": "all-eligible",
+        "eligibleSessionCount": 4,
+        "analyzedSessionCount": 4,
+        "complete": true
+      },
+      "roles": {
+        "userThreadCandidateCount": 4,
+        "childAgentCandidateCount": 0
+      },
+      "longSessions": {
+        "activeCount": 0,
+        "wallOnlyCount": 0,
+        "longestActiveMinutes": 0,
+        "activeRatio": 0,
+        "estimate": {
+          "method": "capped-event-gap",
+          "activeThresholdMinutes": 45,
+          "gapCapMinutes": 5,
+          "idleGapMinutes": 30
+        },
+        "samples": []
+      },
+      "accounting": {
+        "mode": "effort-proxy",
+        "responseCount": 0,
+        "modelAttributedResponseCount": 0,
+        "unattributedResponseCount": 0,
+        "usageFieldObservedCount": 0,
+        "nonZeroUsageCount": 0,
+        "exactCreditsAvailable": false,
+        "pricingVersion": null
+      },
+      "modelUsage": [],
+      "outcomeReview": {
+        "status": "not-applicable",
+        "reviewedCandidateCount": 0,
+        "reviewedActiveLongCount": 0,
+        "comparableModelOutcomeEvidence": false,
+        "recommendation": "controlled-a-b-required"
+      }
+    },
+    "projectName": "Biubo-rust",
+    "locale": "zh-CN",
+    "modelId": "agent-work-loop-v4",
+    "reportContractVersion": 26,
+    "overview": "项目具备 AGENTS.md 和 CI 工作流等基础机制，但会话证据极为有限（仅一次只读探索），验证行为尚未被观察到。一项配置文档同步漂移已被识别。",
+    "dimensions": [
+      {
+        "id": "task-understanding",
+        "label": "任务理解",
+        "score": 30,
+        "summary": "仅一次只读会话候选，任务理解行为未被观察到。",
+        "findingRefs": []
+      },
+      {
+        "id": "controlled-execution",
+        "label": "可控执行",
+        "score": 40,
+        "summary": "AGENTS.md 和 CI 工作流已就位，但尚未在会话中被调用或验证。",
+        "findingRefs": [
+          "config-setup-doc-sync"
+        ]
+      },
+      {
+        "id": "change-validation",
+        "label": "改动验证",
+        "score": 25,
+        "summary": "测试文件和 CI 管道存在，但无编辑或验证行为被观察到。",
+        "findingRefs": []
+      },
+      {
+        "id": "reliable-delivery",
+        "label": "可靠交付",
+        "score": 35,
+        "summary": "CI/CD 工作流覆盖多平台发布，但当前会话未触及交付边界。",
+        "findingRefs": []
+      },
+      {
+        "id": "learning-capture",
+        "label": "经验沉淀",
+        "score": 35,
+        "summary": "无项目级 Memories 或可比较的后续结果，学习捕获尚不适用。",
+        "findingRefs": []
+      }
+    ],
+    "assignmentSummaries": []
+  },
+  "findings": [
+    {
+      "id": "config-setup-doc-sync",
+      "title": "配置变更后设置文档未同步更新",
+      "severity": "Low",
+      "reason": "变更漂移分析检测到 Cargo.toml 和 src/config/settings.rs 有近期变更，但 README.md 等设置文档未同步更新。这是一个伴随同步建议（advisory 级别），变更后的文档可能包含过时的构建或配置指导。证据来源：changeDrift 分析，类型为 config-setup-docs。",
+      "dimensionRefs": [
+        "controlled-execution"
+      ],
+      "aiFixPrompt": "检查 Cargo.toml 和 src/config/settings.rs 的最近变更是否需要在 README.md 中更新构建或配置说明。\n\n## 验证\n\n- 确认 README.md 中的构建步骤与当前 Cargo.toml 一致\n- 确认配置字段说明与 settings.rs 匹配",
+      "expectedArtifact": "Document",
+      "expectedOutput": [
+        "Update the existing Document owner identified by the reviewed evidence and retain a focused validation result."
+      ]
+    }
+  ]
+}

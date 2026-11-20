@@ -91,10 +91,16 @@ tokio-rustls = "0.26"
 hickory-resolver = { version = "0.24", features = ["tokio"] }
 
 # Commercial Edition dependencies (only compiled with --features commercial)
+# ee-core uses `nix` (POSIX-only) — guard integration points with
+# #[cfg(all(feature = "commercial", target_os = "linux"))] in src/.
 ee-license = { path = "commercial/ee-license", optional = true }
-ratatui = { version = "0.28", optional = true }
-crossterm = { version = "0.28", optional = true }
-clap = { version = "4", features = ["derive"], optional = true }
+ee-core    = { path = "commercial/ee-core",    optional = true }
+ee-rules   = { path = "commercial/ee-rules",   optional = true }
+ee-tenant  = { path = "commercial/ee-tenant",  optional = true }
+ee-audit   = { path = "commercial/ee-audit",   optional = true }
+ratatui    = { version = "0.28", optional = true }
+crossterm  = { version = "0.28", optional = true }
+clap       = { version = "4", features = ["derive"], optional = true }
 
 lru = "0.12"
 
@@ -108,7 +114,8 @@ plugin-system = []
 full = ["llm-detection", "advanced-rules", "cluster-mode", "ssl-support", "plugin-system", "redis-support", "postgres-support"]
 redis-support = ["dep:redis"]
 postgres-support = ["dep:tokio-postgres", "dep:deadpool-postgres"]
-commercial = ["dep:ee-license", "dep:ratatui", "dep:crossterm", "dep:clap"]
+commercial = ["dep:ee-license", "dep:ee-rules", "dep:ee-tenant", "dep:ee-audit", "dep:ratatui", "dep:crossterm", "dep:clap"]
+commercial-core = ["commercial", "dep:ee-core"]
 
 [dev-dependencies]
 mockito = "1"

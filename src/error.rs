@@ -5,36 +5,15 @@ use std::fmt;
 pub enum WafError {
     /// I/O error (file operations, network, etc.)
     IoError(std::io::Error),
-    /// Configuration error
-    ConfigError(String),
-    /// Storage error
-    StorageError(String),
-    /// Security error (rate limit, ban, challenge)
-    SecurityError(String),
-    /// WAF detection error
-    DetectionError(String),
-    /// Proxy forwarding error
-    ProxyError(String),
-    /// Plugin error
-    PluginError(String),
     /// Serialization/deserialization error
     SerdeError(String),
-    /// Generic error with message
-    Generic(String),
 }
 
 impl fmt::Display for WafError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WafError::IoError(e) => write!(f, "I/O error: {}", e),
-            WafError::ConfigError(s) => write!(f, "Configuration error: {}", s),
-            WafError::StorageError(s) => write!(f, "Storage error: {}", s),
-            WafError::SecurityError(s) => write!(f, "Security error: {}", s),
-            WafError::DetectionError(s) => write!(f, "Detection error: {}", s),
-            WafError::ProxyError(s) => write!(f, "Proxy error: {}", s),
-            WafError::PluginError(s) => write!(f, "Plugin error: {}", s),
             WafError::SerdeError(s) => write!(f, "Serialization error: {}", s),
-            WafError::Generic(s) => write!(f, "Error: {}", s),
         }
     }
 }

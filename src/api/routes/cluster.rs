@@ -177,7 +177,9 @@ async fn cluster_nodes(
     let dead_nodes = config_sync.manager.list_dead_nodes();
     let primary_node = config_sync.manager.get_primary_node();
 
-    let all_nodes = config_sync.manager.get_all_nodes_info(&dead_nodes, &primary_node);
+    let all_nodes = config_sync
+        .manager
+        .get_all_nodes_info(&dead_nodes, &primary_node);
 
     (
         StatusCode::OK,

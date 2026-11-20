@@ -4,13 +4,13 @@ use crate::core::metrics::METRICS;
 use crate::data::storage::manager::get_db;
 use crate::utils::compression::decompress_json;
 use crate::utils::query_parser::{evaluate, parse};
-use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
+use axum::Router;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
@@ -108,7 +108,8 @@ async fn health_check() -> Response {
     Json(json!({
         "status": "ok",
         "service": "biubo-waf"
-    })).into_response()
+    }))
+    .into_response()
 }
 
 async fn ready_check(State(state): State<Arc<AppState>>) -> Response {
@@ -117,7 +118,7 @@ async fn ready_check(State(state): State<Arc<AppState>>) -> Response {
     checks.insert("service".into(), json!("biubo-waf"));
 
     // Check API key for LLM if configured
-    let llm_configured = !s.api_key.is_empty() || !s.llm_quick_api_key.is_empty();
+    let llm_configured = s.has_llm_api_key();
     checks.insert("llm_configured".into(), json!(llm_configured));
 
     // Check proxy_map is not empty (at least one upstream configured)
@@ -302,7 +303,10 @@ async fn waf_setting(
 
     if let Some(status) = payload.get("status").and_then(|v| v.as_str()) {
         if !matches!(status, "on" | "off" | "pass") {
-            return Json(ApiResponse::<()>::error("status must be one of: on, off, pass")).into_response();
+            return Json(ApiResponse::<()>::error(
+                "status must be one of: on, off, pass",
+            ))
+            .into_response();
         }
         site.insert("status".into(), json!(status));
     }
@@ -383,7 +387,8 @@ async fn waf_log(State(_state): State<Arc<AppState>>, Query(query): Query<DateQu
 
     let db = get_db(&host);
     let logs = db.get_logs();
-    let overview = db.get_log_db()
+    let overview = db
+        .get_log_db()
         .and_then(|ldb| ldb.get("overview"))
         .unwrap_or(json!({}));
 

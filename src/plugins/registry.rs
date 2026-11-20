@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct PluginRegistry {
-    plugins: Arc<DashMap<String, PluginInstance>>,
+    plugins: Arc<DashMap<String, Arc<PluginInstance>>>,
 }
 
 impl PluginRegistry {
@@ -21,7 +21,7 @@ impl PluginRegistry {
         if self.plugins.contains_key(&name) {
             return Err(format!("Plugin '{}' already registered", name));
         }
-        self.plugins.insert(name, plugin);
+        self.plugins.insert(name, Arc::new(plugin));
         Ok(())
     }
 
@@ -34,35 +34,49 @@ impl PluginRegistry {
     }
 
     pub fn enable(&self, name: &str) -> Result<(), String> {
-        let mut plugin = self.plugins.get_mut(name)
+        let mut entry = self
+            .plugins
+            .get_mut(name)
             .ok_or_else(|| format!("Plugin '{}' not found", name))?;
-        plugin.enable();
+        // Arc::make_mut performs copy-on-write: outstanding Arc holders keep
+        // their snapshot while the registry entry is updated in place.
+        Arc::make_mut(&mut entry).enable();
         tracing::info!("Enabled plugin: {}", name);
         Ok(())
     }
 
     pub fn disable(&self, name: &str) -> Result<(), String> {
-        let mut plugin = self.plugins.get_mut(name)
+        let mut entry = self
+            .plugins
+            .get_mut(name)
             .ok_or_else(|| format!("Plugin '{}' not found", name))?;
-        plugin.disable();
+        Arc::make_mut(&mut entry).disable();
         tracing::info!("Disabled plugin: {}", name);
         Ok(())
     }
 
-    pub fn update_config(&self, name: &str, new_config: crate::plugins::types::PluginConfig) -> Result<(), String> {
-        let mut plugin = self.plugins.get_mut(name)
+    pub fn update_config(
+        &self,
+        name: &str,
+        new_config: crate::plugins::types::PluginConfig,
+    ) -> Result<(), String> {
+        let mut entry = self
+            .plugins
+            .get_mut(name)
             .ok_or_else(|| format!("Plugin '{}' not found", name))?;
-        plugin.config = new_config;
+        Arc::make_mut(&mut entry).config = new_config;
         tracing::info!("Updated config for plugin: {}", name);
         Ok(())
     }
 
-    pub fn get(&self, name: &str) -> Option<PluginInstance> {
-        self.plugins.get(name).map(|r| r.value().clone())
+    /// Returns a shared reference to the plugin. No deep copy is performed;
+    /// callers only pay for an atomic refcount increment.
+    pub fn get(&self, name: &str) -> Option<Arc<PluginInstance>> {
+        self.plugins.get(name).map(|r| Arc::clone(r.value()))
     }
 
-    pub fn list(&self) -> Vec<PluginInstance> {
-        self.plugins.iter().map(|r| r.value().clone()).collect()
+    pub fn list(&self) -> Vec<Arc<PluginInstance>> {
+        self.plugins.iter().map(|r| Arc::clone(r.value())).collect()
     }
 
     #[cfg(feature = "plugin-system")]
@@ -73,12 +87,14 @@ impl PluginRegistry {
         for new_plugin in new_plugins {
             let name = &new_plugin.metadata.name;
 
-            if let Some(existing) = self.plugins.get(name) {
-                if existing.value().file_path == new_plugin.file_path {
-                    let mut existing = self.plugins.get_mut(name).unwrap();
-                    let status = existing.status.clone();
-                    *existing.value_mut() = new_plugin;
-                    existing.status = status;
+            if let Some(mut entry) = self.plugins.get_mut(name) {
+                if entry.file_path == new_plugin.file_path {
+                    // Preserve status across the reload; Arc::make_mut
+                    // copy-on-writes if other holders share this Arc.
+                    let plugin = Arc::make_mut(&mut entry);
+                    let status = plugin.status.clone();
+                    *plugin = new_plugin;
+                    plugin.status = status;
                     reloaded += 1;
                 }
             } else {
@@ -92,7 +108,11 @@ impl PluginRegistry {
     }
 
     #[cfg(feature = "plugin-system")]
-    pub fn load_from_directory(&self, loader: &mut PluginLoader, base_dir: &Path) -> Result<usize, String> {
+    pub fn load_from_directory(
+        &self,
+        loader: &mut PluginLoader,
+        base_dir: &Path,
+    ) -> Result<usize, String> {
         let plugins = loader.scan_plugins();
         let count = plugins.len();
 

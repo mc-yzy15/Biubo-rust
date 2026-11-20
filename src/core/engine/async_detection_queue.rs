@@ -185,10 +185,7 @@ pub fn start_async_detection_workers(
                             timestamp: chrono::Utc::now(),
                         };
 
-                        tracing::debug!(
-                            "Async detection completed for request: {}",
-                            request_id
-                        );
+                        tracing::debug!("Async detection completed for request: {}", request_id);
 
                         results_clone.insert(result.request_id.clone(), result);
                     }

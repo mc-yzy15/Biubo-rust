@@ -47,10 +47,7 @@ impl ReputationManager {
                     )));
                 }
                 "ipinfo" => {
-                    providers.push(Arc::new(IPInfoProvider::new(
-                        1.0,
-                        config.base_url.clone(),
-                    )));
+                    providers.push(Arc::new(IPInfoProvider::new(1.0, config.base_url.clone())));
                 }
                 "spamhaus" => {
                     providers.push(Arc::new(SpamhausProvider::new(1.0)));
@@ -136,9 +133,9 @@ impl ReputationManager {
         } else {
             tracing::warn!(
                 ip = ip,
-                "All reputation providers failed or timed out, returning fail-closed score 75.0"
+                "All reputation providers failed or timed out, returning neutral score 0.0"
             );
-            75.0
+            0.0
         };
 
         UnifiedReputationScore {
@@ -208,7 +205,7 @@ mod tests {
 
         let score = manager.query_all("1.2.3.4").await;
         assert_eq!(score.ip, "1.2.3.4");
-        assert_eq!(score.score, 75.0);
+        assert_eq!(score.score, 0.0);
         assert!(score.provider_results.is_empty());
     }
 

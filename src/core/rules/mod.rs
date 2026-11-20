@@ -1,9 +1,8 @@
-
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "advanced-rules")]
 use dashmap::DashMap;
 #[cfg(feature = "advanced-rules")]
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "advanced-rules")]
 use std::collections::HashMap;
 #[cfg(feature = "advanced-rules")]
@@ -213,9 +212,7 @@ impl RuleEngine {
                     if let Some(rule_ref) = self.rules.get(rule_id) {
                         let rule = rule_ref.value().clone();
                         self.statistics.record_hit(rule.id, rule.category.as_str());
-                        matches.push(RuleMatch {
-                            rule,
-                        });
+                        matches.push(RuleMatch { rule });
                     }
                 }
             }

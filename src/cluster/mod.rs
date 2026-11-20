@@ -60,9 +60,12 @@ pub(crate) struct InternalNode {
 impl InternalNode {
     fn new(node: ClusterNode) -> Self {
         let now = Utc::now();
+        // 保留节点自带的 last_heartbeat（如注册时携带的时间戳），
+        // 否则陈旧心跳会被重置为当前时间，导致死节点检测失效。
+        let last_heartbeat = node.last_heartbeat;
         Self {
             node,
-            last_heartbeat: now,
+            last_heartbeat,
             startup_time: now,
         }
     }
@@ -385,15 +388,20 @@ impl ClusterManager {
                 entry.value_mut().node.role = ClusterRole::Primary;
             }
 
-            for entry in self.nodes.iter() {
-                let node_id = entry.key();
-                if node_id != primary_id {
-                    if let Some(mut entry) = self.nodes.get_mut(node_id) {
-                        let internal = entry.value_mut();
-                        if matches!(internal.node.role, ClusterRole::Primary) {
-                            internal.node.role = ClusterRole::Secondary;
-                        }
-                    }
+            // Do not acquire a mutable DashMap entry while an iterator guard
+            // is alive: both may target the same shard and deadlock.
+            let other_node_ids: Vec<String> = self
+                .nodes
+                .iter()
+                .filter_map(|entry| {
+                    (entry.key() != primary_id
+                        && matches!(entry.value().node.role, ClusterRole::Primary))
+                    .then(|| entry.key().clone())
+                })
+                .collect();
+            for node_id in other_node_ids {
+                if let Some(mut entry) = self.nodes.get_mut(&node_id) {
+                    entry.value_mut().node.role = ClusterRole::Secondary;
                 }
             }
 
@@ -424,7 +432,8 @@ impl ClusterManager {
             let node_id = entry.key();
             let internal_node = entry.value();
 
-            if internal_node.node.status == "dead" {
+            // 跳过 dead 与 demoted 节点：被降级的原主节点不应立即被重新提升
+            if internal_node.node.status == "dead" || internal_node.node.status == "demoted" {
                 continue;
             }
 

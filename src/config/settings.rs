@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::models::{ClusterRole, WafApiKey};
 use crate::data::storage::StorageDriverType;
+use crate::utils::crypto::hash_secret_if_needed;
 
 pub type SharedSettings = Arc<RwLock<Arc<Settings>>>;
 
@@ -49,6 +50,15 @@ pub struct Settings {
     pub rate_ban_threshold: i64,
     pub rate_ban_duration_min: i64,
     pub rate_gc_interval: i64,
+
+    // CC attack detection thresholds (see AGENTS.md: 10s window, URL/UA diversity, strikes)
+    pub cc_url_threshold: i64,
+    pub cc_ua_threshold: i64,
+    pub cc_strike_limit: i64,
+
+    // Gray-zone repeated-offender settings (16-29 req/s semantics)
+    pub gray_zone_violation_limit: i64,
+    pub gray_zone_ban_duration_min: i64,
 
     #[serde(skip)]
     pub static_extensions: HashSet<String>,
@@ -107,6 +117,12 @@ pub struct Settings {
     pub cluster_shared_secret: String,
     pub init_token: String,
     pub initialized: bool,
+
+    /// Active commercial feature gate (populated at runtime from license verification, never persisted to config.json).
+    /// Use this for capability dispatch: `settings.active_features.as_ref().map_or(false, |g| g.has_geoip())`.
+    #[cfg(feature = "commercial")]
+    #[serde(skip)]
+    pub active_features: Option<ee_license::FeatureGate>,
 }
 
 fn generate_challenge_secret() -> String {
@@ -141,7 +157,7 @@ impl Default for Settings {
         let default_password = generate_random_password();
 
         Settings {
-            waf_port: 80,
+            waf_port: 8080,
             dashboard_password: default_password,
             cors_origins: vec!["http://ip.zplb.org.cn:7000".to_string()],
 
@@ -170,6 +186,13 @@ impl Default for Settings {
             rate_ban_threshold: 30,
             rate_ban_duration_min: 60,
             rate_gc_interval: 10,
+
+            cc_url_threshold: 50,
+            cc_ua_threshold: 10,
+            cc_strike_limit: 3,
+
+            gray_zone_violation_limit: 5,
+            gray_zone_ban_duration_min: 5,
 
             static_extensions: DEFAULT_STATIC_EXTENSIONS
                 .iter()
@@ -237,6 +260,9 @@ impl Default for Settings {
             cluster_shared_secret: generate_random_secret(),
             init_token: generate_random_secret(),
             initialized: false,
+
+            #[cfg(feature = "commercial")]
+            active_features: None,
         }
     }
 }
@@ -296,18 +322,7 @@ impl Settings {
 
         settings.load_config_file();
         settings.apply_env_vars();
-
-        if !settings.dashboard_password.is_empty() && !settings.dashboard_password.starts_with("$2") {
-            match crate::utils::crypto::hash_password(&settings.dashboard_password) {
-                Ok(hashed) => {
-                    tracing::info!("Dashboard password auto-hashed from plaintext to bcrypt");
-                    settings.dashboard_password = hashed;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to auto-hash dashboard password: {}", e);
-                }
-            }
-        }
+        settings.normalize_persisted_secrets();
 
         settings
     }
@@ -359,7 +374,10 @@ impl Settings {
                 return Err(format!("PROXY_MAP[{}] has empty target URL", host));
             }
             if !target.starts_with("http://") && !target.starts_with("https://") {
-                return Err(format!("PROXY_MAP[{}] target must start with http:// or https://", host));
+                return Err(format!(
+                    "PROXY_MAP[{}] target must start with http:// or https://",
+                    host
+                ));
             }
         }
 
@@ -383,17 +401,26 @@ impl Settings {
         self.initialized
     }
 
+    pub fn has_llm_api_key(&self) -> bool {
+        !self.llm_quick_api_key.is_empty()
+            || !self.llm_deep_api_key.is_empty()
+            || !self.api_key.is_empty()
+    }
+
     pub fn save_config(&self) {
         let config_path = self.project_root.join("config.json");
         let config_data = serde_json::json!({
             "WAF_PORT": self.waf_port,
-            "DASHBOARD_PASSWORD": self.dashboard_password,
+            "DASHBOARD_PASSWORD": Self::hash_secret_for_storage(&self.dashboard_password),
             "CORS_ORIGINS": self.cors_origins,
             "PROXY_MAP": self.proxy_map,
             "DASHBOARD_PATH": self.dashboard_path,
-            "API_KEY": self.api_key,
             "LLM_MODEL": self.llm_model,
             "LLM_BASE_URL": self.llm_base_url,
+            "LLM_QUICK_MODEL": self.llm_quick_model,
+            "LLM_QUICK_BASE_URL": self.llm_quick_base_url,
+            "LLM_DEEP_MODEL": self.llm_deep_model,
+            "LLM_DEEP_BASE_URL": self.llm_deep_base_url,
             "STORAGE_DRIVER": match self.storage_driver {
                 StorageDriverType::MsgPack => "msgpack",
                 #[cfg(feature = "redis-support")]
@@ -408,9 +435,9 @@ impl Settings {
             "SSL_ACME_EMAIL": self.ssl_acme_email,
             "SSL_CERT_DIR": self.ssl_cert_dir.to_string_lossy(),
             "SSL_PORT": self.ssl_port,
-            "INTERNAL_API_KEY": self.internal_api_key,
-            "CLUSTER_SHARED_SECRET": self.cluster_shared_secret,
-            "INIT_TOKEN": self.init_token,
+            "INTERNAL_API_KEY": Self::hash_secret_for_storage(&self.internal_api_key),
+            "CLUSTER_SHARED_SECRET": Self::hash_secret_for_storage(&self.cluster_shared_secret),
+            "INIT_TOKEN": Self::hash_secret_for_storage(&self.init_token),
             "INITIALIZED": self.initialized
         });
 
@@ -564,6 +591,24 @@ impl Settings {
         if let Ok(v) = env::var("WAF_LLM_BASE_URL") {
             self.llm_base_url = v;
         }
+        if let Ok(v) = env::var("WAF_LLM_QUICK_MODEL") {
+            self.llm_quick_model = v;
+        }
+        if let Ok(v) = env::var("WAF_LLM_QUICK_BASE_URL") {
+            self.llm_quick_base_url = v;
+        }
+        if let Ok(v) = env::var("WAF_LLM_QUICK_API_KEY") {
+            self.llm_quick_api_key = v;
+        }
+        if let Ok(v) = env::var("WAF_LLM_DEEP_MODEL") {
+            self.llm_deep_model = v;
+        }
+        if let Ok(v) = env::var("WAF_LLM_DEEP_BASE_URL") {
+            self.llm_deep_base_url = v;
+        }
+        if let Ok(v) = env::var("WAF_LLM_DEEP_API_KEY") {
+            self.llm_deep_api_key = v;
+        }
         if let Ok(v) = env::var("WAF_SESSION_TIMEOUT") {
             if let Ok(val) = v.parse() {
                 self.session_timeout = val;
@@ -610,6 +655,31 @@ impl Settings {
         if let Ok(v) = env::var("WAF_RATE_GC_INTERVAL") {
             if let Ok(val) = v.parse() {
                 self.rate_gc_interval = val;
+            }
+        }
+        if let Ok(v) = env::var("WAF_CC_URL_THRESHOLD") {
+            if let Ok(val) = v.parse() {
+                self.cc_url_threshold = val;
+            }
+        }
+        if let Ok(v) = env::var("WAF_CC_UA_THRESHOLD") {
+            if let Ok(val) = v.parse() {
+                self.cc_ua_threshold = val;
+            }
+        }
+        if let Ok(v) = env::var("WAF_CC_STRIKE_LIMIT") {
+            if let Ok(val) = v.parse() {
+                self.cc_strike_limit = val;
+            }
+        }
+        if let Ok(v) = env::var("WAF_GRAY_ZONE_LIMIT") {
+            if let Ok(val) = v.parse() {
+                self.gray_zone_violation_limit = val;
+            }
+        }
+        if let Ok(v) = env::var("WAF_GRAY_ZONE_BAN_DURATION") {
+            if let Ok(val) = v.parse() {
+                self.gray_zone_ban_duration_min = val;
             }
         }
         if let Ok(v) = env::var("WAF_CHALLENGE_SECRET") {
@@ -659,7 +729,11 @@ impl Settings {
             self.ssl_enabled = v.to_lowercase() == "true";
         }
         if let Ok(v) = env::var("SSL_DOMAINS") {
-            self.ssl_domains = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            self.ssl_domains = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
         if let Ok(v) = env::var("SSL_ACME_EMAIL") {
             self.ssl_acme_email = v;
@@ -672,5 +746,111 @@ impl Settings {
                 self.ssl_port = port;
             }
         }
+        if let Ok(v) = env::var("WAF_INTERNAL_API_KEY") {
+            self.internal_api_key = v;
+        }
+        if let Ok(v) = env::var("WAF_CLUSTER_SHARED_SECRET") {
+            self.cluster_shared_secret = v;
+        }
+        if let Ok(v) = env::var("WAF_INIT_TOKEN") {
+            self.init_token = v;
+        }
+    }
+
+    fn hash_secret_for_storage(secret: &str) -> String {
+        match hash_secret_if_needed(secret) {
+            Ok(hashed) => hashed,
+            Err(e) => {
+                tracing::error!("Failed to hash secret before saving config: {}", e);
+                secret.to_string()
+            }
+        }
+    }
+
+    fn normalize_persisted_secrets(&mut self) {
+        self.dashboard_password =
+            Self::normalize_secret_field("dashboard password", &self.dashboard_password);
+    }
+
+    fn normalize_secret_field(label: &str, value: &str) -> String {
+        match hash_secret_if_needed(value) {
+            Ok(hashed) => {
+                if hashed != value {
+                    tracing::info!("{} auto-hashed from plaintext to bcrypt", label);
+                }
+                hashed
+            }
+            Err(e) => {
+                tracing::error!("Failed to auto-hash {}: {}", label, e);
+                value.to_string()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after UNIX_EPOCH")
+            .as_nanos();
+        std::env::temp_dir().join(format!("biubo-settings-test-{}", nanos))
+    }
+
+    #[test]
+    fn test_has_llm_api_key_checks_all_supported_sources() {
+        let mut settings = Settings::default();
+        assert!(!settings.has_llm_api_key());
+
+        settings.api_key = "legacy".to_string();
+        assert!(settings.has_llm_api_key());
+
+        settings.api_key.clear();
+        settings.llm_quick_api_key = "quick".to_string();
+        assert!(settings.has_llm_api_key());
+
+        settings.llm_quick_api_key.clear();
+        settings.llm_deep_api_key = "deep".to_string();
+        assert!(settings.has_llm_api_key());
+    }
+
+    #[test]
+    fn test_save_config_hashes_and_scrubs_sensitive_fields() {
+        let temp_dir = unique_temp_dir();
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let mut settings = Settings::default();
+        settings.project_root = temp_dir.clone();
+        settings.dashboard_password = "dashboard-pass".to_string();
+        settings.internal_api_key = "internal-secret".to_string();
+        settings.cluster_shared_secret = "cluster-secret".to_string();
+        settings.init_token = "init-secret".to_string();
+        settings.api_key = "legacy-llm-key".to_string();
+        settings.llm_quick_api_key = "quick-key".to_string();
+        settings.llm_deep_api_key = "deep-key".to_string();
+
+        settings.save_config();
+
+        let content = std::fs::read_to_string(temp_dir.join("config.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        let dashboard_password = parsed["DASHBOARD_PASSWORD"].as_str().unwrap();
+        let internal_api_key = parsed["INTERNAL_API_KEY"].as_str().unwrap();
+        let cluster_secret = parsed["CLUSTER_SHARED_SECRET"].as_str().unwrap();
+        let init_token = parsed["INIT_TOKEN"].as_str().unwrap();
+
+        assert!(dashboard_password.starts_with("$2"));
+        assert!(internal_api_key.starts_with("$2"));
+        assert!(cluster_secret.starts_with("$2"));
+        assert!(init_token.starts_with("$2"));
+        assert!(parsed.get("API_KEY").is_none());
+        assert!(parsed.get("LLM_QUICK_API_KEY").is_none());
+        assert!(parsed.get("LLM_DEEP_API_KEY").is_none());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

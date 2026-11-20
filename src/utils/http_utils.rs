@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use crate::config::settings::IpHeaderConfig;
 use crate::utils::url_validator::is_ip_in_range;
 
-static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(reqwest::Client::new);
+static HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(reqwest::Client::new);
 
 pub static STRIP_RESP_HEADERS: &[&str] = &[
     "connection",
@@ -183,10 +184,7 @@ pub async fn get_ip_reputation(ip: &str) -> bool {
         .await
     {
         Ok(resp) => match resp.json::<serde_json::Value>().await {
-            Ok(v) => v
-                .get("safe")
-                .and_then(|s| s.as_bool())
-                .unwrap_or(false),
+            Ok(v) => v.get("safe").and_then(|s| s.as_bool()).unwrap_or(false),
             Err(e) => {
                 tracing::warn!("get_ip_reputation failed for {}: {}", ip, e);
                 false
@@ -198,5 +196,3 @@ pub async fn get_ip_reputation(ip: &str) -> bool {
         }
     }
 }
-
-

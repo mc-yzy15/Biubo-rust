@@ -1,45 +1,25 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use dashmap::DashMap;
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
 use crate::config::settings::Settings;
 use crate::data::storage::base::Database;
+use crate::error::WafResult;
 use serde_json::Value;
-
-#[cfg(feature = "plugin-system")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BanRecord {
-    pub reason: String,
-    pub expire: Option<u32>,
-    pub added_at: String,
-    pub country: String,
-    pub city: String,
-}
-
-#[cfg(feature = "plugin-system")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhitelistRecord {
-    pub remark: String,
-    pub added_at: String,
-}
 
 struct PendingLogEntry {
     host: String,
     entry: serde_json::Value,
 }
 
-static LOG_SENDER: LazyLock<tokio::sync::mpsc::UnboundedSender<PendingLogEntry>> = LazyLock::new(|| {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    start_log_writer_worker(rx);
-    tx
-});
+static LOG_SENDER: LazyLock<tokio::sync::mpsc::UnboundedSender<PendingLogEntry>> =
+    LazyLock::new(|| {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        start_log_writer_worker(rx);
+        tx
+    });
 
 fn start_log_writer_worker(mut rx: tokio::sync::mpsc::UnboundedReceiver<PendingLogEntry>) {
     std::thread::spawn(move || {
@@ -67,7 +47,7 @@ pub struct ProxyDB {
 }
 
 impl ProxyDB {
-    pub fn new(host: &str, settings: &Settings) -> std::io::Result<Self> {
+    pub fn new(host: &str, settings: &Settings) -> WafResult<Self> {
         let host_dir = settings.db_root.join(host);
         std::fs::create_dir_all(host_dir.join("logs"))?;
 
@@ -94,7 +74,7 @@ impl ProxyDB {
     }
 
     /// Create a new ProxyDB at a custom path (used as fallback when normal path fails)
-    pub fn new_with_path(host: &str, host_dir: &PathBuf, settings: &Settings) -> std::io::Result<Self> {
+    pub fn new_with_path(host: &str, host_dir: &PathBuf, settings: &Settings) -> WafResult<Self> {
         std::fs::create_dir_all(host_dir.join("logs"))?;
 
         let ram_path = host_dir.join("RAM.msgpack");
@@ -125,13 +105,12 @@ impl ProxyDB {
         let _ = std::fs::create_dir_all(&host_dir);
 
         let ram_path = host_dir.join("RAM.msgpack");
-        let ram = Database::new_with_pool(&ram_path, false, 5)
-            .unwrap_or_else(|_| {
-                let fallback_path = std::env::temp_dir()
-                    .join(format!("biubo-waf-ram-{}.msgpack", host));
-                Database::new_with_pool(&fallback_path, false, 5)
-                    .expect("Impossible: temp fallback DB creation failed")
-            });
+        let ram = Database::new_with_pool(&ram_path, false, 5).unwrap_or_else(|_| {
+            let fallback_path =
+                std::env::temp_dir().join(format!("biubo-waf-ram-{}.msgpack", host));
+            Database::new_with_pool(&fallback_path, false, 5)
+                .expect("Impossible: temp fallback DB creation failed")
+        });
 
         ProxyDB {
             host: host.to_string(),
@@ -144,7 +123,7 @@ impl ProxyDB {
         }
     }
 
-    fn init_ram_if_empty(&mut self, settings: &Settings) -> std::io::Result<()> {
+    fn init_ram_if_empty(&mut self, settings: &Settings) -> WafResult<()> {
         let template_path = settings.template_root.join("RAM.json");
         if template_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&template_path) {
@@ -169,7 +148,7 @@ impl ProxyDB {
         Ok(())
     }
 
-    pub fn ensure_log_db(&self) -> std::io::Result<()> {
+    pub fn ensure_log_db(&self) -> WafResult<()> {
         let date_str = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let new_path = self
             .host_dir
@@ -616,59 +595,132 @@ impl ProxyDB {
     }
 }
 
-static PROXY_DBS: once_cell::sync::Lazy<DashMap<String, Arc<ProxyDB>>> =
-    once_cell::sync::Lazy::new(DashMap::new);
+/// PROXY_DBS 缓存容量上限（可缓存的不同 host 数量）。
+///
+/// 目前为模块级常量；后续可迁移到 config.json / 环境变量实现可配置化
+/// （受限于并行修改窗口，本次不改动 src/config/settings.rs）。
+const PROXY_DB_CACHE_MAX_CAPACITY: u64 = 1000;
 
-pub fn get_db(host: &str) -> Arc<ProxyDB> {
-    PROXY_DBS
-        .entry(host.to_string())
-        .or_insert_with(|| {
-            let settings = crate::config::settings::Settings::load();
-            match ProxyDB::new(host, &settings) {
-                Ok(db) => Arc::new(db),
-                Err(e) => {
-                    tracing::error!("Failed to create ProxyDB for host '{}': {}", host, e);
+/// PROXY_DBS 缓存 TTI（秒）：host 空闲超过该时长后被淘汰。
+const PROXY_DB_CACHE_TTI_SECS: u64 = 3600;
+
+/// Settings 一次性快照：进程启动后只加载一次，供所有缓存 miss 复用。
+///
+/// 原实现在每次 miss 时都调用 `Settings::load()` 重读配置文件；
+/// 攻击者用随机 Host 头可触发海量文件 I/O。快照复用消除该开销。
+/// 如需运行时配置热更新，后续再引入刷新机制。
+static SETTINGS_SNAPSHOT: LazyLock<Settings> = LazyLock::new(Settings::load);
+
+/// 有界 ProxyDB 缓存：moka LRU（max_capacity）+ TTI 淘汰。
+///
+/// 淘汰时通过 eviction listener 对被淘汰实例执行 flush，
+/// 保证 LRU/TTI 淘汰不丢失未落盘的写入。
+static PROXY_DBS: LazyLock<moka::sync::Cache<String, Arc<ProxyDB>>> = LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(PROXY_DB_CACHE_MAX_CAPACITY)
+        .time_to_idle(std::time::Duration::from_secs(PROXY_DB_CACHE_TTI_SECS))
+        .eviction_listener(|host: Arc<String>, db: Arc<ProxyDB>, cause| {
+            // listener 处于同步上下文，Database::flush 为同步 API，可直接调用。
+            // 失败仅忽略（与 flush_all 保持一致），绝不 panic。
+            db.ram.flush().ok();
+            if let Some(log_db) = db.get_log_db() {
+                log_db.flush().ok();
+            }
+            tracing::debug!(
+                "ProxyDB for host '{}' evicted from cache (cause: {:?}), flushed to disk",
+                host,
+                cause
+            );
+        })
+        .build()
+});
+
+/// 创建 ProxyDB 实例（三级 fallback：正常路径 → temp_dir fallback → 纯内存 ephemeral）。
+fn create_proxy_db(host: &str) -> Arc<ProxyDB> {
+    let settings: &Settings = &SETTINGS_SNAPSHOT;
+    match ProxyDB::new(host, settings) {
+        Ok(db) => Arc::new(db),
+        Err(e) => {
+            tracing::error!("Failed to create ProxyDB for host '{}': {}", host, e);
+            tracing::warn!("Creating fallback ProxyDB for '{}' to avoid crash", host);
+            // Try fallback in temp directory
+            let fallback_dir = std::env::temp_dir().join("biubo-waf-fallback").join(host);
+            match ProxyDB::new_with_path(host, &fallback_dir, settings) {
+                Ok(db) => {
                     tracing::warn!(
-                        "Creating fallback ProxyDB for '{}' to avoid crash",
-                        host
+                        "Using fallback ProxyDB for '{}' at {:?}",
+                        host,
+                        fallback_dir
                     );
-                    // Try fallback in temp directory
-                    let fallback_dir = std::env::temp_dir()
-                        .join("biubo-waf-fallback")
-                        .join(host);
-                    match ProxyDB::new_with_path(host, &fallback_dir, &settings) {
-                        Ok(db) => {
-                            tracing::warn!(
-                                "Using fallback ProxyDB for '{}' at {:?}",
-                                host,
-                                fallback_dir
-                            );
-                            Arc::new(db)
-                        }
-                        Err(fallback_err) => {
-                            tracing::error!(
-                                "Fallback ProxyDB also failed: {} - using in-memory stub",
-                                fallback_err
-                            );
-                            Arc::new(ProxyDB::new_ephemeral(host))
-                        }
-                    }
+                    Arc::new(db)
+                }
+                Err(fallback_err) => {
+                    tracing::error!(
+                        "Fallback ProxyDB also failed: {} - using in-memory stub",
+                        fallback_err
+                    );
+                    Arc::new(ProxyDB::new_ephemeral(host))
                 }
             }
-        })
-        .clone()
+        }
+    }
+}
+
+pub fn get_db(host: &str) -> Arc<ProxyDB> {
+    // get_with：并发 miss 时只有一个线程执行初始化，其余等待复用结果。
+    // 三级 fallback 保证 create_proxy_db 不会返回错误（最坏降级为 ephemeral）。
+    PROXY_DBS.get_with(host.to_string(), || create_proxy_db(host))
 }
 
 /// Flush all ProxyDB instances (used during graceful shutdown).
 /// Ensures all pending writes are persisted before the process exits.
 pub async fn flush_all() {
     tracing::info!("Flushing all ProxyDB instances...");
-    let count = PROXY_DBS.len();
-    for entry in PROXY_DBS.iter() {
-        entry.ram.flush().ok();
-        if let Some(log_db) = entry.get_log_db() {
+    let count = PROXY_DBS.entry_count();
+    for (_host, db) in PROXY_DBS.iter() {
+        db.ram.flush().ok();
+        if let Some(log_db) = db.get_log_db() {
             log_db.flush().ok();
         }
     }
     tracing::info!("Flushed {} ProxyDB instances", count);
+}
+
+/// 缓存当前条目数（仅测试用，用于验证有界化行为）。
+#[cfg(test)]
+pub(crate) fn proxy_db_cache_len() -> u64 {
+    PROXY_DBS.entry_count()
+}
+
+#[cfg(test)]
+mod proxy_db_cache_tests {
+    use super::*;
+
+    /// 行为验证：插入远超容量上限的不同 host 后，缓存条目数 ≤ max_capacity。
+    ///
+    /// 直接插入 ephemeral 实例避免依赖 Settings/磁盘目录；
+    /// run_pending_tasks() 强制 moka 处理待淘汰队列后再计数。
+    #[test]
+    fn test_unbounded_cache_growth() {
+        let total = PROXY_DB_CACHE_MAX_CAPACITY as usize + 500;
+        for i in 0..total {
+            let host = format!("cache-bound-test-{}.invalid", i);
+            PROXY_DBS.insert(host, Arc::new(ProxyDB::new_ephemeral("cache-bound-test")));
+        }
+        // moka 的 entry_count 为最终一致，需先执行待处理淘汰任务
+        PROXY_DBS.run_pending_tasks();
+        PROXY_DBS.run_pending_tasks();
+
+        let len = proxy_db_cache_len();
+        assert!(
+            len <= PROXY_DB_CACHE_MAX_CAPACITY,
+            "PROXY_DBS 缓存未被容量上限约束: {} > {}",
+            len,
+            PROXY_DB_CACHE_MAX_CAPACITY
+        );
+
+        // 清理测试污染，避免影响同进程内其他测试
+        PROXY_DBS.invalidate_all();
+        PROXY_DBS.run_pending_tasks();
+    }
 }

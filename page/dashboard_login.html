@@ -89,19 +89,20 @@ async function login() {
   const btn = document.getElementById('btn');
   const err = document.getElementById('err');
   const t = I18N[curLang];
+  const base = window.location.pathname.replace(/\/dashboard\/login\/?$/, '');
   if (!pwd) { err.textContent = t.errEmpty; err.dataset.errId = 'errEmpty'; return; }
   btn.disabled = true;
   err.textContent = '';
   err.dataset.errId = '';
   try {
-    const r = await fetch('/biubo-cgi/dashboard/api/login', {
+    const r = await fetch(`${base}/dashboard/api/login`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({password: pwd})
     });
     const d = await r.json();
     if (d.status === 'success') {
-      window.location.href = '/biubo-cgi/dashboard';
+      window.location.href = `${base}/dashboard`;
     } else {
       err.textContent = curLang === 'zh' && d.msg ? d.msg : t.errWrong;
       err.dataset.errId = 'errWrong';

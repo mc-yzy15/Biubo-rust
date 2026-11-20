@@ -99,9 +99,7 @@ impl FlusherPool {
                 .expect("Failed to spawn flusher worker");
         }
 
-        Self {
-            registry,
-        }
+        Self { registry }
     }
 
     pub fn register(
@@ -123,7 +121,6 @@ impl FlusherPool {
         });
         FlushHandle::new(alive)
     }
-
 }
 
 // Global singleton: lazily initialized with CPU-count workers.

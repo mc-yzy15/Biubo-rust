@@ -1,8 +1,8 @@
 use std::io::{Read, Write};
 
-use flate2::Compression;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::ZlibEncoder;
+use flate2::Compression;
 
 pub fn compress_json(data: &serde_json::Value) -> Vec<u8> {
     let packed = match rmp_serde::to_vec(data) {
@@ -27,9 +27,28 @@ pub fn compress_json(data: &serde_json::Value) -> Vec<u8> {
     result
 }
 
+/// 将 JSON 值压缩为可安全存入 JSON 字符串的文本形式（hex 编码，带 `hex:` 前缀）。
+///
+/// 压缩产物是任意二进制字节，不能直接用 `String::from_utf8_lossy` 转字符串
+/// （会破坏数据导致解压失败），必须使用无损的文本编码。
+pub fn compress_json_to_string(data: &serde_json::Value) -> String {
+    format!("hex:{}", hex::encode(compress_json(data)))
+}
+
 pub fn decompress_json(data: &[u8]) -> serde_json::Value {
     if data.is_empty() {
         return serde_json::json!({});
+    }
+
+    // 文本形式存储的压缩数据（见 compress_json_to_string）
+    if let Some(hex_str) = data.strip_prefix(b"hex:") {
+        return match hex::decode(hex_str) {
+            Ok(bytes) => decompress_json(&bytes),
+            Err(e) => {
+                tracing::error!("decompress_json (hex decode) failed: {}", e);
+                serde_json::json!({})
+            }
+        };
     }
 
     if data[0] == b'm' {

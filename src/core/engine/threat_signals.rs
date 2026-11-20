@@ -48,13 +48,23 @@ impl ThreatSignals {
     #[cfg(test)]
     pub fn combined_threat_score(&self) -> f64 {
         let encoded_weight = if self.has_encoded_payload { 0.20 } else { 0.0 };
-        let progression_weight = if self.has_attack_progression { 0.20 } else { 0.0 };
+        let progression_weight = if self.has_attack_progression {
+            0.20
+        } else {
+            0.0
+        };
         let behavior_component = self.behavior_score * 0.18;
         let reputation_component = self.reputation_score * 0.12;
         let progression_component = self.attack_progression_score * 0.15;
         let encoded_component = self.encoded_content_ratio * 0.15;
 
-        (encoded_weight + progression_weight + behavior_component + reputation_component + progression_component + encoded_component).min(1.0)
+        (encoded_weight
+            + progression_weight
+            + behavior_component
+            + reputation_component
+            + progression_component
+            + encoded_component)
+            .min(1.0)
     }
 }
 
@@ -96,7 +106,7 @@ pub fn has_attack_progression(ip_history: &[RequestRecord]) -> bool {
     }
 
     let recent: Vec<&RequestRecord> = ip_history.iter().rev().take(10).collect();
-    
+
     let suspicious_count = recent.iter().filter(|r| r.is_suspicious).count();
     if suspicious_count >= 3 {
         return true;
@@ -121,12 +131,12 @@ fn detect_path_enumeration(records: &[&RequestRecord]) -> bool {
     }
 
     let paths: Vec<&str> = records.iter().map(|r| r.url.as_str()).collect();
-    
+
     let mut sequential_count = 0;
     for i in 1..paths.len().min(10) {
         let current = paths[i];
         let previous = paths[i - 1];
-        
+
         let similarity = compute_path_similarity(previous, current);
         if similarity > 0.7 {
             sequential_count += 1;
@@ -139,7 +149,7 @@ fn detect_path_enumeration(records: &[&RequestRecord]) -> bool {
 fn compute_path_similarity(path1: &str, path2: &str) -> f64 {
     let parts1: Vec<&str> = path1.split('/').collect();
     let parts2: Vec<&str> = path2.split('/').collect();
-    
+
     let max_len = parts1.len().max(parts2.len());
     if max_len == 0 {
         return 1.0;
@@ -158,7 +168,7 @@ fn compute_path_similarity(path1: &str, path2: &str) -> f64 {
 fn detect_suspicious_status_pattern(records: &[&RequestRecord]) -> bool {
     let error_count = records.iter().filter(|r| r.status_code >= 400).count();
     let not_found_count = records.iter().filter(|r| r.status_code == 404).count();
-    
+
     let total = records.len();
     if total == 0 {
         return false;
@@ -201,7 +211,9 @@ fn compute_behavior_score(headers: &HashMap<String, String>, body: &str) -> f64 
 
     let has_ua = headers.keys().any(|k| k.eq_ignore_ascii_case("user-agent"));
     let has_accept = headers.keys().any(|k| k.eq_ignore_ascii_case("accept"));
-    let has_accept_lang = headers.keys().any(|k| k.eq_ignore_ascii_case("accept-language"));
+    let has_accept_lang = headers
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case("accept-language"));
     let has_referer = headers.keys().any(|k| k.eq_ignore_ascii_case("referer"));
 
     if !has_ua {
@@ -214,7 +226,11 @@ fn compute_behavior_score(headers: &HashMap<String, String>, body: &str) -> f64 
         score += 0.1;
     }
 
-    if let Some(ua) = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("user-agent")).map(|(_, v)| v.as_str()) {
+    if let Some(ua) = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+        .map(|(_, v)| v.as_str())
+    {
         if is_suspicious_ua(ua) {
             score += 0.4;
         }
@@ -225,15 +241,37 @@ fn compute_behavior_score(headers: &HashMap<String, String>, body: &str) -> f64 
 
 fn is_suspicious_ua(ua: &str) -> bool {
     let suspicious_patterns = [
-        "sqlmap", "nikto", "nmap", "burp", "dirbuster",
-        "gobuster", "nuclei", "wfuzz", "hydra", "curl/",
-        "python-requests", "python-urllib", "go-http-client",
-        "httpx", "ffuf", "caido", "projectdiscovery",
-        "httpie", "arjun", "dirsearch", "zap", "skipfish",
-        "whatweb", "wappalyzer", "masscan", "rustscan",
+        "sqlmap",
+        "nikto",
+        "nmap",
+        "burp",
+        "dirbuster",
+        "gobuster",
+        "nuclei",
+        "wfuzz",
+        "hydra",
+        "curl/",
+        "python-requests",
+        "python-urllib",
+        "go-http-client",
+        "httpx",
+        "ffuf",
+        "caido",
+        "projectdiscovery",
+        "httpie",
+        "arjun",
+        "dirsearch",
+        "zap",
+        "skipfish",
+        "whatweb",
+        "wappalyzer",
+        "masscan",
+        "rustscan",
     ];
 
-    suspicious_patterns.iter().any(|p| ua.to_lowercase().contains(p))
+    suspicious_patterns
+        .iter()
+        .any(|p| ua.to_lowercase().contains(p))
 }
 
 fn compute_attack_progression_score(ip_history: &[RequestRecord]) -> f64 {
@@ -277,7 +315,9 @@ mod tests {
 
     #[test]
     fn test_has_encoded_payload_with_base64() {
-        assert!(has_encoded_payload("base64,SGVsbG8gV29ybGQhIFRoaXMgaXMgYSBsb25nIHN0cmluZw=="));
+        assert!(has_encoded_payload(
+            "base64,SGVsbG8gV29ybGQhIFRoaXMgaXMgYSBsb25nIHN0cmluZw=="
+        ));
     }
 
     #[test]
@@ -289,9 +329,21 @@ mod tests {
     #[test]
     fn test_has_attack_progression_with_suspicious_requests() {
         let history = vec![
-            RequestRecord { url: "/admin".to_string(), status_code: 403, is_suspicious: true },
-            RequestRecord { url: "/admin/config".to_string(), status_code: 403, is_suspicious: true },
-            RequestRecord { url: "/admin/users".to_string(), status_code: 403, is_suspicious: true },
+            RequestRecord {
+                url: "/admin".to_string(),
+                status_code: 403,
+                is_suspicious: true,
+            },
+            RequestRecord {
+                url: "/admin/config".to_string(),
+                status_code: 403,
+                is_suspicious: true,
+            },
+            RequestRecord {
+                url: "/admin/users".to_string(),
+                status_code: 403,
+                is_suspicious: true,
+            },
         ];
         assert!(has_attack_progression(&history));
     }
@@ -299,9 +351,21 @@ mod tests {
     #[test]
     fn test_no_attack_progression_with_normal_requests() {
         let history = vec![
-            RequestRecord { url: "/index.html".to_string(), status_code: 200, is_suspicious: false },
-            RequestRecord { url: "/about".to_string(), status_code: 200, is_suspicious: false },
-            RequestRecord { url: "/contact".to_string(), status_code: 200, is_suspicious: false },
+            RequestRecord {
+                url: "/index.html".to_string(),
+                status_code: 200,
+                is_suspicious: false,
+            },
+            RequestRecord {
+                url: "/about".to_string(),
+                status_code: 200,
+                is_suspicious: false,
+            },
+            RequestRecord {
+                url: "/contact".to_string(),
+                status_code: 200,
+                is_suspicious: false,
+            },
         ];
         assert!(!has_attack_progression(&history));
     }
@@ -343,7 +407,7 @@ mod tests {
         headers.insert("accept".to_string(), "*/*".to_string());
         headers.insert("accept-language".to_string(), "en".to_string());
         headers.insert("referer".to_string(), "http://example.com".to_string());
-        
+
         let score = compute_behavior_score(&headers, "");
         assert!(score > 0.3);
     }

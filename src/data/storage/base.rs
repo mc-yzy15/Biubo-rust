@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,6 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::data::storage::flusher_pool::{global_pool, FlushHandle};
+use crate::error::WafResult;
 use parking_lot::Mutex;
 
 const MSGPACK_EXT: &str = "msgpack";
@@ -54,7 +53,15 @@ impl Database {
         }
 
         // Spawn dedicated flusher thread
-        let handle = spawn_flusher_thread(data, dirty, stop_flag, path, auto_backup, max_backup_count, flush_interval)?;
+        let handle = spawn_flusher_thread(
+            data,
+            dirty,
+            stop_flag,
+            path,
+            auto_backup,
+            max_backup_count,
+            flush_interval,
+        )?;
         *db.flusher_handle.lock() = Some(handle);
 
         Ok(db)
@@ -66,7 +73,7 @@ impl Database {
         path: impl AsRef<Path>,
         auto_backup: bool,
         max_backup_count: usize,
-    ) -> std::io::Result<Self> {
+    ) -> WafResult<Self> {
         let path = normalize_path(path);
         ensure_parent_dir(&path)?;
 
@@ -105,16 +112,6 @@ impl Database {
         self.dirty.store(true, Ordering::Release);
     }
 
-    #[cfg(feature = "plugin-system")]
-    pub fn delete(&self, key: &str) -> bool {
-        let mut guard = self.data.lock();
-        let removed = guard.remove(key).is_some();
-        if removed {
-            self.dirty.store(true, Ordering::Release);
-        }
-        removed
-    }
-
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.data.lock().len()
@@ -128,11 +125,6 @@ impl Database {
         self.data.lock().contains_key(key)
     }
 
-    pub fn keys(&self) -> Vec<String> {
-        let guard = self.data.lock();
-        guard.keys().cloned().collect()
-    }
-
     pub fn flush(&self) -> std::io::Result<()> {
         if !self.dirty.load(Ordering::Acquire) {
             return Ok(());
@@ -142,7 +134,10 @@ impl Database {
             return Ok(());
         }
         if self.auto_backup {
-            let _ = crate::data::storage::storage_utils::create_backup(&self.path, self.max_backup_count);
+            let _ = crate::data::storage::storage_utils::create_backup(
+                &self.path,
+                self.max_backup_count,
+            );
         }
         crate::data::storage::storage_utils::write_to_disk(&guard, &self.path)?;
         self.dirty.store(false, Ordering::Release);
@@ -178,7 +173,9 @@ fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn init_state(path: &Path) -> std::io::Result<(
+fn init_state(
+    path: &Path,
+) -> std::io::Result<(
     Arc<Mutex<HashMap<String, serde_json::Value>>>,
     Arc<AtomicBool>,
     Arc<AtomicBool>,
