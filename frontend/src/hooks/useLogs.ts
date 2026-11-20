@@ -1,336 +1,206 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
-import { Log, UseLogsReturn } from '../types'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { Log } from '../types'
 
 const WAF_BASE = '/biubo-cgi'
 const LOG_PAGE_SIZE = 10
+export type LogTypeFilter = 'all' | 'normal' | 'hacker' | 'challenge'
 
-function todayStr(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+interface ApiEnvelope<T> {
+  status?: string
+  data?: T
+  message?: string
 }
 
-function dateOffset(dateStr: string, days: number): string {
-  const d = new Date(dateStr + 'T00:00:00')
-  d.setDate(d.getDate() + days)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-async function fetchDayLogs(date: string): Promise<Log[]> {
-  try {
-    const r = await fetch(`${WAF_BASE}/info/biubo/log?date=${encodeURIComponent(date)}`)
-    if (!r.ok) return []
-    const data = await r.json()
-    const logs: Log[] = Array.isArray(data) ? data : []
-    logs.forEach(l => { if (!l._date) l._date = date })
-    return logs
-  } catch {
-    return []
+async function readApiData<T>(response: Response): Promise<T> {
+  const payload = await response.json() as ApiEnvelope<T> | T
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  if (payload && typeof payload === 'object' && 'status' in payload) {
+    const envelope = payload as ApiEnvelope<T>
+    if (envelope.status === 'error') throw new Error(envelope.message || 'Request failed')
+    return envelope.data as T
   }
+  return payload as T
 }
 
-export function useLogs(host: string | null): UseLogsReturn {
+function logTimestamp(log: Log): number {
+  if (typeof log.timestamp === 'number') return log.timestamp
+  if (typeof log.time === 'string') return Date.parse(log.time) || 0
+  return 0
+}
+
+function logMatchesType(log: Log, filter: LogTypeFilter): boolean {
+  if (filter === 'all') return true
+  const type = String(log.type || '').toLowerCase()
+  const attackTypes = Array.isArray(log.attack_types)
+    ? log.attack_types.map(value => String(value).toLowerCase())
+    : []
+  if (filter === 'hacker') return type === 'hacker' || attackTypes.length > 0
+  if (filter === 'challenge') return type === 'challenge' || type === 'challenged'
+  return type === 'normal' && attackTypes.length === 0
+}
+
+export function useLogs(host: string | null) {
   const [allLogs, setAllLogs] = useState<Log[]>([])
   const [searchLogs, setSearchLogs] = useState<Log[]>([])
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [typeFilter, setTypeFilter] = useState<LogTypeFilter>('all')
   const [page, setPage] = useState(1)
-  const [totalPages, setTotalPages] = useState(1)
   const [loading, setLoading] = useState(false)
-  const [noMoreData, setNoMoreData] = useState(false)
-  const [loadedDates, setLoadedDates] = useState<string[]>([])
-  const [currentDate, setCurrentDate] = useState(todayStr())
-  const [modalOpen, setModalOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [selectedLog, setSelectedLog] = useState<Log | null>(null)
+  const [modalOpen, setModalOpen] = useState(false)
   const [rrwebLoading, setRrwebLoading] = useState(false)
   const [rrwebEvents, setRrwebEvents] = useState<unknown[]>([])
   const [hasReplayData, setHasReplayData] = useState(false)
-  const rrwebPlayerRef = useRef<InstanceType<typeof window.rrwebPlayer> | null>(null)
-  const mountedRef = useRef(true)
+  const requestIdRef = useRef(0)
+  const fetchIdRef = useRef(0)
 
-  useEffect(() => {
-    mountedRef.current = true
-    return () => { mountedRef.current = false }
-  }, [])
-
-  const loadMoreLogs = useCallback(async () => {
-    if (loading || noMoreData) return
-
-    setLoading(true)
-
-    let cur: string
-    if (loadedDates.length > 0) {
-      cur = dateOffset(loadedDates[loadedDates.length - 1], -1)
-    } else {
-      cur = todayStr()
-    }
-
-    for (let tried = 0; tried < 60; tried++) {
-      if (loadedDates.includes(cur)) {
-        cur = dateOffset(cur, -1)
-        continue
-      }
-
-      setLoadedDates(prev => [...prev, cur])
-      const logs = await fetchDayLogs(cur)
-
-      if (logs.length > 0) {
-        logs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
-        setAllLogs(prev => [...prev, ...logs])
-        if (mountedRef.current) {
-          setLoading(false)
-          setCurrentDate(cur)
-        }
-        return
-      }
-
-      const daysDiff = Math.round((new Date(todayStr()).getTime() - new Date(cur + 'T00:00:00').getTime()) / 86400000)
-      if (daysDiff > 365) {
-        if (mountedRef.current) {
-          setNoMoreData(true)
-          setLoading(false)
-        }
-        break
-      }
-      cur = dateOffset(cur, -1)
-    }
-
-    if (mountedRef.current) {
-      setLoading(false)
-      if (allLogs.length === 0) {
-        setNoMoreData(true)
-      }
-    }
-  }, [loading, noMoreData, loadedDates, allLogs.length])
-
-  const initLogs = useCallback(async () => {
-    setAllLogs([])
-    setLoadedDates([])
-    setNoMoreData(false)
-    setLoading(false)
-    setSearchMode(false)
-    setSearchLogs([])
-    setPage(1)
-    setCurrentDate(todayStr())
-
-    let cur = todayStr()
-
-    for (let tried = 0; tried < 60; tried++) {
-      const logs = await fetchDayLogs(cur)
-
-      if (logs.length > 0) {
-        logs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
-        if (mountedRef.current) {
-          setAllLogs(logs)
-          setLoadedDates([cur])
-          setCurrentDate(cur)
-          setLoading(false)
-        }
-        return
-      }
-
-      const daysDiff = Math.round((new Date(todayStr()).getTime() - new Date(cur + 'T00:00:00').getTime()) / 86400000)
-      if (daysDiff > 365) {
-        if (mountedRef.current) {
-          setNoMoreData(true)
-          setLoading(false)
-        }
-        break
-      }
-      cur = dateOffset(cur, -1)
-    }
-
-    if (mountedRef.current) {
-      setLoading(false)
-      setNoMoreData(true)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!host) return
-    initLogs()
-  }, [host, initLogs])
-
-  useEffect(() => {
-    const logs = searchMode ? searchLogs : allLogs
-    const tp = Math.max(1, Math.ceil(logs.length / LOG_PAGE_SIZE))
-    setTotalPages(tp)
-    if (page > tp) setPage(tp > 0 ? tp : 1)
-  }, [allLogs, searchLogs, searchMode, page])
-
-  const handleSearch = useCallback(async () => {
-    const stmt = searchQuery.trim()
-    if (!stmt) {
-      handleClearSearch()
+  const loadLogs = useCallback(async () => {
+    const fetchId = ++fetchIdRef.current
+    if (!host) {
+      setAllLogs([])
+      setSearchLogs([])
+      setSearchMode(false)
+      setError(null)
       return
     }
+
     setLoading(true)
+    setError(null)
+    setAllLogs([])
+    setSearchLogs([])
+    setSearchMode(false)
+    setPage(1)
     try {
-      const r = await fetch(`${WAF_BASE}/info/biubo/search?statement=${encodeURIComponent(stmt)}`)
-      const data = await r.json()
-      if (data.error) {
-        if (mountedRef.current) {
-          setLoading(false)
-        }
-        return
-      }
-      const logs: Log[] = Array.isArray(data) ? data : []
-      logs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
-      if (mountedRef.current) {
-        setSearchMode(true)
-        setSearchLogs(logs)
-        setPage(1)
-        setLoading(false)
-      }
-    } catch {
-      if (mountedRef.current) {
-        setLoading(false)
-      }
+      const url = `${WAF_BASE}/info/biubo/log?host=${encodeURIComponent(host)}`
+      const data = await readApiData<{ logs?: Log[] } | Log[]>(await fetch(url))
+      const logs = Array.isArray(data) ? data : Array.isArray(data?.logs) ? data.logs : []
+      logs.sort((a, b) => logTimestamp(b) - logTimestamp(a))
+      if (fetchId !== fetchIdRef.current) return
+      setAllLogs(logs)
+      setSearchMode(false)
+      setPage(1)
+    } catch (e: unknown) {
+      if (fetchId === fetchIdRef.current) setError(e instanceof Error ? e.message : 'Request failed')
+    } finally {
+      if (fetchId === fetchIdRef.current) setLoading(false)
     }
-  }, [searchQuery])
+  }, [host])
+
+  useEffect(() => {
+    void loadLogs()
+  }, [loadLogs])
+
+  const sourceLogs = searchMode ? searchLogs : allLogs
+  const filteredLogs = useMemo(
+    () => sourceLogs.filter(log => logMatchesType(log, typeFilter)),
+    [sourceLogs, typeFilter],
+  )
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / LOG_PAGE_SIZE))
+  const pageLogs = filteredLogs.slice((page - 1) * LOG_PAGE_SIZE, page * LOG_PAGE_SIZE)
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages)
+  }, [page, totalPages])
+
+  const handleSearch = useCallback(async () => {
+    const statement = searchQuery.trim()
+    if (!statement) {
+      setSearchMode(false)
+      setSearchLogs([])
+      setPage(1)
+      setError(null)
+      return
+    }
+    if (!host) {
+      setError('No host selected')
+      return
+    }
+
+    const fetchId = ++fetchIdRef.current
+    setLoading(true)
+    setError(null)
+    try {
+      const params = new URLSearchParams({ host, statement })
+      const data = await readApiData<Log[]>(await fetch(`${WAF_BASE}/info/biubo/search?${params}`))
+      const logs = Array.isArray(data) ? data : []
+      logs.sort((a, b) => logTimestamp(b) - logTimestamp(a))
+      if (fetchId !== fetchIdRef.current) return
+      setSearchLogs(logs)
+      setSearchMode(true)
+      setPage(1)
+    } catch (e: unknown) {
+      if (fetchId === fetchIdRef.current) setError(e instanceof Error ? e.message : 'Request failed')
+    } finally {
+      if (fetchId === fetchIdRef.current) setLoading(false)
+    }
+  }, [host, searchQuery])
 
   const handleClearSearch = useCallback(() => {
+    fetchIdRef.current += 1
+    setLoading(false)
     setSearchQuery('')
     setSearchMode(false)
     setSearchLogs([])
+    setError(null)
     setPage(1)
   }, [])
 
-  const handlePrevDay = useCallback(() => {
-    if (loadedDates.length === 0) return
-    const idx = loadedDates.length - 1
-    const prev = dateOffset(loadedDates[idx], -1)
-    setLoadedDates(dates => [...dates, prev])
-    setCurrentDate(prev)
-    fetchDayLogs(prev).then(logs => {
-      if (logs.length > 0) {
-        logs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
-        setAllLogs(prev => [...prev, ...logs])
-      }
-    })
-  }, [loadedDates])
+  const handleGoPage = useCallback((nextPage: number) => {
+    setPage(Math.max(1, Math.min(nextPage, totalPages)))
+  }, [totalPages])
 
-  const handleNextDay = useCallback(() => {
-    if (loadedDates.length <= 1) return
-    const idx = loadedDates.length - 2
-    setCurrentDate(loadedDates[idx])
-  }, [loadedDates])
-
-  const handleGoPage = useCallback((p: number) => {
-    if (searchMode) {
-      if (p < 1 || p > totalPages) return
-      setPage(p)
-      return
-    }
-
-    const logs = allLogs
-    const tp = Math.max(1, Math.ceil(logs.length / LOG_PAGE_SIZE))
-
-    if (p >= tp && !noMoreData) {
-      setLoading(true)
-      loadMoreLogs().then(() => {
-        if (mountedRef.current) {
-          const newTotal = Math.max(1, Math.ceil(allLogs.length / LOG_PAGE_SIZE))
-          setPage(Math.min(p, newTotal))
-          setLoading(false)
-        }
-      })
-      return
-    }
-
-    if (p < 1) p = 1
-    if (p > tp) p = tp
-    setPage(p)
-  }, [searchMode, totalPages, allLogs, noMoreData, loadMoreLogs])
-
-  const openDetail = useCallback((log: Log) => {
+  const openDetail = useCallback(async (log: Log) => {
+    const requestId = ++requestIdRef.current
     setSelectedLog(log)
     setModalOpen(true)
     setRrwebEvents([])
     setHasReplayData(false)
-    setRrwebLoading(true)
+    setRrwebLoading(Boolean(host && log.request_id))
 
-    if (rrwebPlayerRef.current) {
-      try {
-        rrwebPlayerRef.current.$destroy?.()
-      } catch { }
-      rrwebPlayerRef.current = null
-    }
+    if (!host || !log.request_id) return
 
-    const rid = log.request_id
-    const d = log._date
-    if (!rid || !d) {
-      setRrwebLoading(false)
-      return
-    }
-
-    fetch(`${WAF_BASE}/info/biubo/rrweb?date=${encodeURIComponent(d)}&id=${encodeURIComponent(rid)}`)
-      .then(r => r.json())
-      .then(events => {
-        if (!mountedRef.current) return
-        if (!Array.isArray(events) || events.length < 2) {
-          setRrwebLoading(false)
-          return
-        }
+    try {
+      const params = new URLSearchParams({ host, id: log.request_id })
+      const events = await readApiData<unknown[]>(await fetch(`${WAF_BASE}/info/biubo/rrweb?${params}`))
+      if (requestId !== requestIdRef.current) return
+      if (Array.isArray(events) && events.length > 1) {
         setRrwebEvents(events)
         setHasReplayData(true)
-        setRrwebLoading(false)
-
-        setTimeout(() => {
-          const playerEl = document.getElementById('modal-replay-player')
-          if (playerEl && window.rrwebPlayer) {
-            try {
-              rrwebPlayerRef.current = new window.rrwebPlayer({
-                target: playerEl,
-                props: {
-                  events,
-                  autoPlay: false,
-                  width: playerEl.offsetWidth || 760,
-                  height: 400,
-                },
-              })
-            } catch { }
-          }
-        }, 100)
-      })
-      .catch(() => {
-        if (mountedRef.current) {
-          setRrwebLoading(false)
-        }
-      })
-  }, [])
+      }
+    } catch {
+      // Keep the log detail available even if replay data cannot be loaded.
+    } finally {
+      if (requestId === requestIdRef.current) setRrwebLoading(false)
+    }
+  }, [host])
 
   const closeDetail = useCallback(() => {
+    requestIdRef.current += 1
     setModalOpen(false)
     setSelectedLog(null)
     setRrwebEvents([])
     setHasReplayData(false)
-    if (rrwebPlayerRef.current) {
-      try {
-        rrwebPlayerRef.current.$destroy?.()
-      } catch { }
-      rrwebPlayerRef.current = null
-    }
+    setRrwebLoading(false)
   }, [])
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeDetail()
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [closeDetail])
+  const handleTypeFilter = useCallback((filter: LogTypeFilter) => {
+    setTypeFilter(filter)
+    setPage(1)
+  }, [])
 
   return {
     allLogs,
-    searchLogs,
     searchMode,
     searchQuery,
+    typeFilter,
     page,
     totalPages,
+    pageLogs,
+    filteredCount: filteredLogs.length,
     loading,
-    noMoreData,
-    loadedDates,
-    currentDate,
+    error,
     selectedLog,
     modalOpen,
     rrwebLoading,
@@ -339,9 +209,9 @@ export function useLogs(host: string | null): UseLogsReturn {
     setSearchQuery,
     handleSearch,
     handleClearSearch,
-    handlePrevDay,
-    handleNextDay,
+    handleTypeFilter,
     handleGoPage,
+    loadLogs,
     openDetail,
     closeDetail,
   }

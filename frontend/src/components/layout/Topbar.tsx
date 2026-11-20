@@ -8,6 +8,12 @@ interface HostOption {
   port: number
 }
 
+interface ProxyMapResponse {
+  status?: string
+  data?: { proxy_map?: Record<string, string> } | Record<string, string>
+  proxy_map?: Record<string, string>
+}
+
 export function Topbar() {
   const { hosts, currentHost, setCurrentHost, language, setLanguage, setHosts, sidebarOpen, setSidebarOpen } = useApp()
   const { t, i18n } = useTranslation()
@@ -23,20 +29,23 @@ export function Topbar() {
   }, [])
 
   useEffect(() => {
-    api.get<HostOption[]>('/biubo/dashboard/proxy-map')
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setHosts(data)
-        } else if (data && typeof data === 'object') {
-          const list = Object.entries(data).map(([host, port]) => ({
-            host,
-            port: typeof port === 'number' ? port : 443,
-          }))
-          setHosts(list)
+    api.get<ProxyMapResponse | HostOption[]>('/biubo/dashboard/proxy-map')
+      .then((response) => {
+        let list: HostOption[] = []
+        if (Array.isArray(response)) {
+          list = response
+        } else if (response && typeof response === 'object') {
+          const data = response.data && typeof response.data === 'object' ? response.data : response
+          const proxyMap = 'proxy_map' in data && data.proxy_map && typeof data.proxy_map === 'object'
+            ? data.proxy_map
+            : data
+          list = Object.entries(proxyMap).map(([host]) => ({ host, port: 443 }))
         }
+        setHosts(list)
+        if (!currentHost && list.length > 0) setCurrentHost(list[0].host)
       })
       .catch(() => {})
-  }, [setHosts])
+  }, [setCurrentHost, setHosts])
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -52,8 +61,6 @@ export function Topbar() {
     (host: string) => {
       setCurrentHost(host)
       setHostDropdownOpen(false)
-      const protocol = window.location.protocol
-      window.location.href = `${protocol}//${host}/biubo/dashboard`
     },
     [setCurrentHost]
   )
