@@ -42,6 +42,7 @@ pub fn protected_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/biubo/config", get(get_config).post(update_config))
         .route("/api/biubo/dashboard/cache-stats", get(cache_stats))
+        .route("/api/biubo/dashboard/runtime", get(runtime_status))
         .route("/api/biubo/dashboard/proxy-map", get(proxy_map))
 }
 
@@ -208,6 +209,27 @@ async fn proxy_map(State(state): State<Arc<AppState>>) -> Response {
     let s = state.settings.read();
     Json(ApiResponse::success(serde_json::json!({
         "proxy_map": s.proxy_map
+    })))
+    .into_response()
+}
+
+async fn runtime_status(State(state): State<Arc<AppState>>) -> Response {
+    let detection = state
+        .async_detection_queue
+        .as_ref()
+        .map(|queue| queue.snapshot());
+    let metrics = crate::core::metrics::METRICS.snapshot();
+    Json(ApiResponse::success(serde_json::json!({
+        "detection_queue": detection,
+        "log_queue": {
+            "capacity": metrics.log_queue_capacity,
+            "depth": metrics.log_queue_depth,
+            "submitted": metrics.log_queue_submitted,
+            "written": metrics.log_written,
+            "dropped": metrics.log_queue_dropped,
+            "security_dropped": metrics.log_queue_security_dropped,
+            "write_errors": metrics.log_write_errors,
+        }
     })))
     .into_response()
 }

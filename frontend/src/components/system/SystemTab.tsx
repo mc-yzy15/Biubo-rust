@@ -5,6 +5,7 @@ import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { GaugeCard } from './GaugeCard'
 import { SystemInfoList } from './SystemInfoList'
 import { WafStatusEditor } from './WafStatusEditor'
+import { RuntimeHealth } from './RuntimeHealth'
 
 interface ToastItem {
   id: number
@@ -86,6 +87,8 @@ export function SystemTab() {
           colorVariant="red"
         />
       </div>
+
+      <RuntimeHealth />
 
       {/* Row 2: System info + WAF status */}
       <div className="grid-2">

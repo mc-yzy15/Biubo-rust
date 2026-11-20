@@ -1,8 +1,10 @@
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use parking_lot::Mutex;
-use std::sync::LazyLock;
 
 use crate::config::settings::Settings;
 use crate::data::storage::base::Database;
@@ -14,26 +16,207 @@ struct PendingLogEntry {
     entry: serde_json::Value,
 }
 
-static LOG_SENDER: LazyLock<tokio::sync::mpsc::UnboundedSender<PendingLogEntry>> =
-    LazyLock::new(|| {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        start_log_writer_worker(rx);
-        tx
-    });
+struct LogQueue {
+    normal: tokio::sync::mpsc::Sender<PendingLogEntry>,
+    security: tokio::sync::mpsc::Sender<PendingLogEntry>,
+}
 
-fn start_log_writer_worker(mut rx: tokio::sync::mpsc::UnboundedReceiver<PendingLogEntry>) {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("log writer runtime");
-        rt.block_on(async move {
-            while let Some(pending) = rx.recv().await {
-                let db = get_db(&pending.host);
-                db.write_log_direct(pending.entry);
+static LOG_QUEUE: LazyLock<LogQueue> = LazyLock::new(|| {
+    let (normal_tx, normal_rx) =
+        tokio::sync::mpsc::channel(crate::core::metrics::LOG_QUEUE_NORMAL_CAPACITY);
+    let (security_tx, security_rx) =
+        tokio::sync::mpsc::channel(crate::core::metrics::LOG_QUEUE_SECURITY_CAPACITY);
+    start_log_writer_worker(normal_rx, security_rx);
+    LogQueue {
+        normal: normal_tx,
+        security: security_tx,
+    }
+});
+
+fn is_high_priority_security_log(entry: &serde_json::Value) -> bool {
+    ["type", "detection_type"].iter().any(|key| {
+        entry
+            .get(*key)
+            .and_then(serde_json::Value::as_str)
+            .map(|value| {
+                [
+                    "hacker",
+                    "challenge",
+                    "block",
+                    "blocked",
+                    "attack",
+                    "malicious",
+                ]
+                .iter()
+                .any(|kind| value.eq_ignore_ascii_case(kind))
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn try_enqueue_log(
+    sender: &tokio::sync::mpsc::Sender<PendingLogEntry>,
+    pending: PendingLogEntry,
+    metrics: &crate::core::metrics::Metrics,
+) -> Result<(), tokio::sync::mpsc::error::TrySendError<PendingLogEntry>> {
+    let permit = match sender.try_reserve() {
+        Ok(permit) => permit,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(())) => {
+            return Err(tokio::sync::mpsc::error::TrySendError::Full(pending));
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => {
+            return Err(tokio::sync::mpsc::error::TrySendError::Closed(pending));
+        }
+    };
+    // Reserve capacity before updating the gauge, then publish only after the
+    // gauge has been incremented so the receiver cannot underflow it.
+    metrics.log_queue_depth.fetch_add(1, Ordering::Relaxed);
+    metrics.log_queue_submitted.fetch_add(1, Ordering::Relaxed);
+    permit.send(pending);
+    Ok(())
+}
+
+fn enqueue_log(
+    queue: &LogQueue,
+    pending: PendingLogEntry,
+    high_priority: bool,
+    metrics: &crate::core::metrics::Metrics,
+) {
+    if high_priority {
+        match try_enqueue_log(&queue.security, pending, metrics) {
+            Ok(()) => return,
+            Err(tokio::sync::mpsc::error::TrySendError::Full(pending)) => {
+                // Security logs may use spare normal capacity, but normal traffic
+                // cannot consume the reserved security queue.
+                match try_enqueue_log(&queue.normal, pending, metrics) {
+                    Ok(()) => return,
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        metrics
+                            .log_queue_enqueue_errors
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
             }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(pending)) => {
+                metrics
+                    .log_queue_enqueue_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                match try_enqueue_log(&queue.normal, pending, metrics) {
+                    Ok(()) => return,
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        metrics
+                            .log_queue_enqueue_errors
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        metrics
+            .log_queue_security_dropped
+            .fetch_add(1, Ordering::Relaxed);
+    } else {
+        match try_enqueue_log(&queue.normal, pending, metrics) {
+            Ok(()) => return,
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                metrics
+                    .log_queue_enqueue_errors
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    metrics.log_queue_dropped.fetch_add(1, Ordering::Relaxed);
+}
+
+fn decrement_log_queue_depth(metrics: &crate::core::metrics::Metrics) {
+    let _ = metrics
+        .log_queue_depth
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            Some(current.saturating_sub(1))
         });
-    });
+}
+
+fn start_log_writer_worker(
+    mut normal_rx: tokio::sync::mpsc::Receiver<PendingLogEntry>,
+    mut security_rx: tokio::sync::mpsc::Receiver<PendingLogEntry>,
+) {
+    let spawn_result = std::thread::Builder::new()
+        .name("log-writer".into())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(error) => {
+                    tracing::error!("Failed to build log writer runtime: {}", error);
+                    let metrics = &crate::core::metrics::METRICS;
+                    metrics.log_write_errors.fetch_add(1, Ordering::Relaxed);
+                    security_rx.close();
+                    normal_rx.close();
+                    while security_rx.try_recv().is_ok() {
+                        decrement_log_queue_depth(metrics);
+                        metrics.log_write_errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                    while normal_rx.try_recv().is_ok() {
+                        decrement_log_queue_depth(metrics);
+                        metrics.log_write_errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                let mut security_open = true;
+                let mut normal_open = true;
+                loop {
+                    let pending = tokio::select! {
+                        pending = security_rx.recv(), if security_open => {
+                            if pending.is_none() { security_open = false; }
+                            pending
+                        },
+                        pending = normal_rx.recv(), if normal_open => {
+                            if pending.is_none() { normal_open = false; }
+                            pending
+                        },
+                        else => break,
+                    };
+                    let Some(pending) = pending else {
+                        continue;
+                    };
+                    decrement_log_queue_depth(&crate::core::metrics::METRICS);
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        get_db(&pending.host).write_log_direct_checked(pending.entry)
+                    }));
+                    match result {
+                        Ok(true) => {
+                            crate::core::metrics::METRICS
+                                .log_written
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(false) => {
+                            crate::core::metrics::METRICS
+                                .log_write_errors
+                                .fetch_add(1, Ordering::Relaxed);
+                            tracing::error!("Failed to persist queued log entry");
+                        }
+                        Err(_) => {
+                            crate::core::metrics::METRICS
+                                .log_write_errors
+                                .fetch_add(1, Ordering::Relaxed);
+                            tracing::error!("Log writer panicked while persisting an entry");
+                        }
+                    }
+                }
+            });
+        });
+    if let Err(error) = spawn_result {
+        tracing::error!("Failed to spawn log writer thread: {}", error);
+        crate::core::metrics::METRICS
+            .log_queue_enqueue_errors
+            .fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub struct ProxyDB {
@@ -204,30 +387,44 @@ impl ProxyDB {
     }
 
     pub fn write_log(&self, entry: serde_json::Value) {
-        let _ = LOG_SENDER.send(PendingLogEntry {
-            host: self.host.clone(),
-            entry,
-        });
+        let high_priority = is_high_priority_security_log(&entry);
+        enqueue_log(
+            &LOG_QUEUE,
+            PendingLogEntry {
+                host: self.host.clone(),
+                entry,
+            },
+            high_priority,
+            &crate::core::metrics::METRICS,
+        );
     }
 
     pub fn write_log_direct(&self, entry: serde_json::Value) {
+        let _ = self.write_log_direct_checked(entry);
+    }
+
+    fn write_log_direct_checked(&self, entry: serde_json::Value) -> bool {
         #[cfg(feature = "plugin-system")]
         let entry_for_exporter = entry.clone();
 
         // Use the new O(1) individual-key path when a request_id is present.
         if entry.get("request_id").and_then(|v| v.as_str()).is_some() {
-            self.write_log_entry(entry);
+            if !self.write_log_entry_checked(entry) {
+                return false;
+            }
             #[cfg(feature = "plugin-system")]
             tokio::spawn(async move {
                 crate::plugins::trigger_exporters(entry_for_exporter).await;
             });
-            return;
+            return true;
         }
 
         // Legacy path for entries without request_id
         let should_export = {
             let _guard = self.lock.lock();
-            let _ = self.ensure_log_db();
+            if self.ensure_log_db().is_err() {
+                return false;
+            }
             let log_db = self.log_db.lock();
             if let Some(ref db) = *log_db {
                 let mut logs = db
@@ -255,6 +452,7 @@ impl ProxyDB {
                 crate::plugins::trigger_exporters(entry_for_exporter).await;
             });
         }
+        should_export
     }
 
     pub fn ram_get(&self, key: &str) -> Option<serde_json::Value> {
@@ -551,14 +749,21 @@ impl ProxyDB {
     /// Write a log entry using the new individual-key format.
     /// Stores the entry as `log:{request_id}` and maintains a capped `log_index` for iteration.
     /// This is O(1) instead of O(n) like the legacy `write_log_direct`.
+    #[allow(dead_code)]
     pub fn write_log_entry(&self, entry: serde_json::Value) {
+        let _ = self.write_log_entry_checked(entry);
+    }
+
+    fn write_log_entry_checked(&self, entry: serde_json::Value) -> bool {
         let request_id = entry
             .get("request_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
         let _guard = self.lock.lock();
-        let _ = self.ensure_log_db();
+        if self.ensure_log_db().is_err() {
+            return false;
+        }
         let log_db = self.log_db.lock();
         if let Some(ref db) = *log_db {
             if let Some(ref rid) = request_id {
@@ -591,6 +796,9 @@ impl ProxyDB {
                 logs.push(entry);
                 db.set("logs", Value::Array(logs));
             }
+            true
+        } else {
+            false
         }
     }
 }
@@ -690,6 +898,214 @@ pub async fn flush_all() {
 #[cfg(test)]
 pub(crate) fn proxy_db_cache_len() -> u64 {
     PROXY_DBS.entry_count()
+}
+
+#[cfg(test)]
+mod log_queue_tests {
+    use super::*;
+
+    fn pending(id: usize, entry: serde_json::Value) -> PendingLogEntry {
+        PendingLogEntry {
+            host: format!("test-{id}.invalid"),
+            entry,
+        }
+    }
+
+    fn queue(
+        normal_capacity: usize,
+        security_capacity: usize,
+    ) -> (
+        LogQueue,
+        tokio::sync::mpsc::Receiver<PendingLogEntry>,
+        tokio::sync::mpsc::Receiver<PendingLogEntry>,
+    ) {
+        let (normal, normal_rx) = tokio::sync::mpsc::channel(normal_capacity);
+        let (security, security_rx) = tokio::sync::mpsc::channel(security_capacity);
+        (LogQueue { normal, security }, normal_rx, security_rx)
+    }
+
+    #[test]
+    fn log_queue_has_fixed_bounded_capacity_and_security_priority() {
+        use crate::core::metrics::{
+            Metrics, LOG_QUEUE_CAPACITY, LOG_QUEUE_NORMAL_CAPACITY, LOG_QUEUE_SECURITY_CAPACITY,
+        };
+
+        assert_eq!(
+            LOG_QUEUE_CAPACITY,
+            LOG_QUEUE_NORMAL_CAPACITY + LOG_QUEUE_SECURITY_CAPACITY
+        );
+        assert!(LOG_QUEUE_NORMAL_CAPACITY > 0);
+        assert!(LOG_QUEUE_SECURITY_CAPACITY > 0);
+
+        let (queue, _normal_rx, _security_rx) = queue(2, 1);
+        let metrics = Metrics::new();
+
+        // Normal traffic cannot consume the separately reserved security slot.
+        enqueue_log(
+            &queue,
+            pending(0, serde_json::json!({"type":"normal"})),
+            false,
+            &metrics,
+        );
+        enqueue_log(
+            &queue,
+            pending(1, serde_json::json!({"type":"normal"})),
+            false,
+            &metrics,
+        );
+        enqueue_log(
+            &queue,
+            pending(2, serde_json::json!({"type":"normal"})),
+            false,
+            &metrics,
+        );
+        assert_eq!(metrics.log_queue_submitted.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.log_queue_dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.log_queue_depth.load(Ordering::Relaxed), 2);
+
+        // Security logs use their reserve first, then fall back to normal capacity.
+        enqueue_log(
+            &queue,
+            pending(3, serde_json::json!({"detection_type":"hacker"})),
+            true,
+            &metrics,
+        );
+        enqueue_log(
+            &queue,
+            pending(4, serde_json::json!({"type":"challenge"})),
+            true,
+            &metrics,
+        );
+        assert_eq!(metrics.log_queue_submitted.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            metrics.log_queue_security_dropped.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(metrics.log_queue_dropped.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.log_queue_depth.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn high_priority_logs_fall_back_to_available_normal_capacity() {
+        use crate::core::metrics::Metrics;
+
+        let (queue, _normal_rx, _security_rx) = queue(2, 1);
+        let metrics = Metrics::new();
+        enqueue_log(
+            &queue,
+            pending(0, serde_json::json!({"type":"hacker"})),
+            true,
+            &metrics,
+        );
+        enqueue_log(
+            &queue,
+            pending(1, serde_json::json!({"type":"normal"})),
+            false,
+            &metrics,
+        );
+        enqueue_log(
+            &queue,
+            pending(2, serde_json::json!({"type":"block"})),
+            true,
+            &metrics,
+        );
+
+        assert_eq!(metrics.log_queue_submitted.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.log_queue_depth.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.log_queue_dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            metrics.log_queue_security_dropped.load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn closed_channels_are_counted_without_blocking_or_panicking() {
+        use crate::core::metrics::Metrics;
+
+        let (normal, normal_rx) = tokio::sync::mpsc::channel(1);
+        let (security, security_rx) = tokio::sync::mpsc::channel(1);
+        drop(normal_rx);
+        drop(security_rx);
+        let queue = LogQueue { normal, security };
+        let metrics = Metrics::new();
+
+        enqueue_log(
+            &queue,
+            pending(0, serde_json::json!({"type":"normal"})),
+            false,
+            &metrics,
+        );
+        enqueue_log(
+            &queue,
+            pending(1, serde_json::json!({"type":"hacker"})),
+            true,
+            &metrics,
+        );
+
+        assert_eq!(metrics.log_queue_enqueue_errors.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.log_queue_dropped.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            metrics.log_queue_security_dropped.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(metrics.log_queue_depth.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn concurrent_producers_keep_queue_and_metrics_bounded() {
+        use crate::core::metrics::Metrics;
+        use std::sync::Arc;
+
+        const CAPACITY: usize = 32;
+        const PRODUCERS: usize = 8;
+        const PER_PRODUCER: usize = 100;
+        let (queue, _normal_rx, _security_rx) = queue(CAPACITY, 4);
+        let queue = Arc::new(queue);
+        let metrics = Arc::new(Metrics::new());
+
+        std::thread::scope(|scope| {
+            for producer in 0..PRODUCERS {
+                let queue = Arc::clone(&queue);
+                let metrics = Arc::clone(&metrics);
+                scope.spawn(move || {
+                    for index in 0..PER_PRODUCER {
+                        enqueue_log(
+                            &queue,
+                            pending(
+                                producer * PER_PRODUCER + index,
+                                serde_json::json!({"type":"normal"}),
+                            ),
+                            false,
+                            &metrics,
+                        );
+                    }
+                });
+            }
+        });
+
+        let accepted = metrics.log_queue_submitted.load(Ordering::Relaxed);
+        let dropped = metrics.log_queue_dropped.load(Ordering::Relaxed);
+        assert_eq!(accepted, CAPACITY as u64);
+        assert_eq!(dropped, (PRODUCERS * PER_PRODUCER - CAPACITY) as u64);
+        assert_eq!(
+            metrics.log_queue_depth.load(Ordering::Relaxed),
+            CAPACITY as u64
+        );
+    }
+
+    #[test]
+    fn security_event_classifier_is_case_insensitive_and_low_cardinality() {
+        assert!(is_high_priority_security_log(
+            &serde_json::json!({"type":"HACKER"})
+        ));
+        assert!(is_high_priority_security_log(
+            &serde_json::json!({"detection_type":"challenge"})
+        ));
+        assert!(!is_high_priority_security_log(
+            &serde_json::json!({"type":"normal", "host":"hacker"})
+        ));
+    }
 }
 
 #[cfg(test)]

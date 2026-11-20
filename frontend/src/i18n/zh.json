@@ -112,7 +112,20 @@
     "wafStatus": "WAF 状态",
     "save": "保存",
     "saveSuccess": "保存成功",
-    "saveFailed": "保存失败"
+    "saveFailed": "保存失败",
+    "runtimeQueues": "运行时队列健康",
+    "detectionQueue": "异步检测队列",
+    "logQueue": "日志写入队列",
+    "healthy": "正常",
+    "degraded": "降级",
+    "unavailable": "暂不可用",
+    "inFlight": "处理中",
+    "completed": "已完成",
+    "rejected": "已拒绝",
+    "written": "已写入",
+    "dropped": "已丢弃",
+    "securityDropped": "安全日志丢弃",
+    "writeErrors": "写入错误"
   },
   "globe": {
     "threatStats": "威胁统计",

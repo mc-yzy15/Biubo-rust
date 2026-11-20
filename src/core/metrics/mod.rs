@@ -2,6 +2,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 use std::time::Duration;
 
+/// Bounded log-writer queue capacity, split to reserve room for security events.
+pub const LOG_QUEUE_SECURITY_CAPACITY: usize = 1024;
+pub const LOG_QUEUE_NORMAL_CAPACITY: usize = 7168;
+pub const LOG_QUEUE_CAPACITY: usize = LOG_QUEUE_SECURITY_CAPACITY + LOG_QUEUE_NORMAL_CAPACITY;
+
 /// Core metrics for Biubo WAF performance monitoring.
 ///
 /// All counters use `Ordering::Relaxed` for maximum performance -
@@ -12,6 +17,7 @@ pub struct Metrics {
     pub requests_blocked: AtomicU64,
     pub requests_passed: AtomicU64,
     pub requests_challenged: AtomicU64,
+    pub request_body_rejections: AtomicU64,
 
     // ── LLM counters ──
     pub llm_calls_total: AtomicU64,
@@ -31,6 +37,16 @@ pub struct Metrics {
     pub db_write_ops: AtomicU64,
     pub db_read_ops: AtomicU64,
 
+    // ── Log queue counters and gauges ──
+    pub log_queue_submitted: AtomicU64,
+    pub log_queue_dropped: AtomicU64,
+    pub log_queue_security_dropped: AtomicU64,
+    pub log_queue_enqueue_errors: AtomicU64,
+    pub log_write_errors: AtomicU64,
+    pub log_written: AtomicU64,
+    pub log_queue_depth: AtomicU64,
+    pub log_queue_capacity: AtomicU64,
+
     // ── Security counters ──
     pub rate_limit_triggers: AtomicU64,
     pub challenge_tokens_issued: AtomicU64,
@@ -45,12 +61,13 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             requests_total: AtomicU64::new(0),
             requests_blocked: AtomicU64::new(0),
             requests_passed: AtomicU64::new(0),
             requests_challenged: AtomicU64::new(0),
+            request_body_rejections: AtomicU64::new(0),
             llm_calls_total: AtomicU64::new(0),
             llm_calls_tier1: AtomicU64::new(0),
             llm_calls_tier2: AtomicU64::new(0),
@@ -63,6 +80,14 @@ impl Metrics {
             waf_cache_misses: AtomicU64::new(0),
             db_write_ops: AtomicU64::new(0),
             db_read_ops: AtomicU64::new(0),
+            log_queue_submitted: AtomicU64::new(0),
+            log_queue_dropped: AtomicU64::new(0),
+            log_queue_security_dropped: AtomicU64::new(0),
+            log_queue_enqueue_errors: AtomicU64::new(0),
+            log_write_errors: AtomicU64::new(0),
+            log_written: AtomicU64::new(0),
+            log_queue_depth: AtomicU64::new(0),
+            log_queue_capacity: AtomicU64::new(LOG_QUEUE_CAPACITY as u64),
             rate_limit_triggers: AtomicU64::new(0),
             challenge_tokens_issued: AtomicU64::new(0),
             challenge_tokens_verified: AtomicU64::new(0),
@@ -111,6 +136,7 @@ impl Metrics {
             requests_blocked: self.requests_blocked.load(Ordering::Relaxed),
             requests_passed: self.requests_passed.load(Ordering::Relaxed),
             requests_challenged: self.requests_challenged.load(Ordering::Relaxed),
+            request_body_rejections: self.request_body_rejections.load(Ordering::Relaxed),
             llm_calls_total: self.llm_calls_total.load(Ordering::Relaxed),
             llm_calls_tier1: self.llm_calls_tier1.load(Ordering::Relaxed),
             llm_calls_tier2: self.llm_calls_tier2.load(Ordering::Relaxed),
@@ -123,6 +149,14 @@ impl Metrics {
             waf_cache_misses: self.waf_cache_misses.load(Ordering::Relaxed),
             db_write_ops: self.db_write_ops.load(Ordering::Relaxed),
             db_read_ops: self.db_read_ops.load(Ordering::Relaxed),
+            log_queue_submitted: self.log_queue_submitted.load(Ordering::Relaxed),
+            log_queue_dropped: self.log_queue_dropped.load(Ordering::Relaxed),
+            log_queue_security_dropped: self.log_queue_security_dropped.load(Ordering::Relaxed),
+            log_queue_enqueue_errors: self.log_queue_enqueue_errors.load(Ordering::Relaxed),
+            log_write_errors: self.log_write_errors.load(Ordering::Relaxed),
+            log_written: self.log_written.load(Ordering::Relaxed),
+            log_queue_depth: self.log_queue_depth.load(Ordering::Relaxed),
+            log_queue_capacity: self.log_queue_capacity.load(Ordering::Relaxed),
             rate_limit_triggers: self.rate_limit_triggers.load(Ordering::Relaxed),
             challenge_tokens_issued: self.challenge_tokens_issued.load(Ordering::Relaxed),
             challenge_tokens_verified: self.challenge_tokens_verified.load(Ordering::Relaxed),
@@ -165,6 +199,13 @@ impl Metrics {
         out.push_str(&format!(
             "biubo_requests_challenged {}\n",
             snap.requests_challenged
+        ));
+
+        out.push_str("# HELP biubo_request_body_rejections_total Oversized or unreadable request bodies rejected\n");
+        out.push_str("# TYPE biubo_request_body_rejections_total counter\n");
+        out.push_str(&format!(
+            "biubo_request_body_rejections_total {}\n",
+            snap.request_body_rejections
         ));
 
         out.push_str("# HELP biubo_llm_calls_total Total LLM API calls\n");
@@ -227,6 +268,56 @@ impl Metrics {
         out.push_str("# TYPE biubo_db_read_ops counter\n");
         out.push_str(&format!("biubo_db_read_ops {}\n", snap.db_read_ops));
 
+        out.push_str("# HELP biubo_log_queue_capacity Maximum number of queued log entries\n");
+        out.push_str("# TYPE biubo_log_queue_capacity gauge\n");
+        out.push_str(&format!(
+            "biubo_log_queue_capacity {}\n",
+            snap.log_queue_capacity
+        ));
+        out.push_str("# HELP biubo_log_queue_depth Current queued log entries\n");
+        out.push_str("# TYPE biubo_log_queue_depth gauge\n");
+        out.push_str(&format!("biubo_log_queue_depth {}\n", snap.log_queue_depth));
+
+        out.push_str("# HELP biubo_log_queue_submitted Total log entries accepted by the queue\n");
+        out.push_str("# TYPE biubo_log_queue_submitted counter\n");
+        out.push_str(&format!(
+            "biubo_log_queue_submitted {}\n",
+            snap.log_queue_submitted
+        ));
+        out.push_str(
+            "# HELP biubo_log_queue_dropped Total log entries dropped because queues were full\n",
+        );
+        out.push_str("# TYPE biubo_log_queue_dropped counter\n");
+        out.push_str(&format!(
+            "biubo_log_queue_dropped {}\n",
+            snap.log_queue_dropped
+        ));
+        out.push_str("# HELP biubo_log_queue_security_dropped Total high-priority security log entries dropped\n");
+        out.push_str("# TYPE biubo_log_queue_security_dropped counter\n");
+        out.push_str(&format!(
+            "biubo_log_queue_security_dropped {}\n",
+            snap.log_queue_security_dropped
+        ));
+        out.push_str(
+            "# HELP biubo_log_queue_enqueue_errors Total log queue closed-channel errors\n",
+        );
+        out.push_str("# TYPE biubo_log_queue_enqueue_errors counter\n");
+        out.push_str(&format!(
+            "biubo_log_queue_enqueue_errors {}\n",
+            snap.log_queue_enqueue_errors
+        ));
+        out.push_str("# HELP biubo_log_write_errors Total log persistence errors or panics\n");
+        out.push_str("# TYPE biubo_log_write_errors counter\n");
+        out.push_str(&format!(
+            "biubo_log_write_errors {}\n",
+            snap.log_write_errors
+        ));
+        out.push_str(
+            "# HELP biubo_log_written Total log entries applied to the storage database\n",
+        );
+        out.push_str("# TYPE biubo_log_written counter\n");
+        out.push_str(&format!("biubo_log_written {}\n", snap.log_written));
+
         out.push_str("# HELP biubo_rate_limit_triggers Rate limit trigger count\n");
         out.push_str("# TYPE biubo_rate_limit_triggers counter\n");
         out.push_str(&format!(
@@ -285,6 +376,7 @@ pub struct MetricsSnapshot {
     pub requests_blocked: u64,
     pub requests_passed: u64,
     pub requests_challenged: u64,
+    pub request_body_rejections: u64,
     pub llm_calls_total: u64,
     pub llm_calls_tier1: u64,
     pub llm_calls_tier2: u64,
@@ -297,6 +389,14 @@ pub struct MetricsSnapshot {
     pub waf_cache_misses: u64,
     pub db_write_ops: u64,
     pub db_read_ops: u64,
+    pub log_queue_submitted: u64,
+    pub log_queue_dropped: u64,
+    pub log_queue_security_dropped: u64,
+    pub log_queue_enqueue_errors: u64,
+    pub log_write_errors: u64,
+    pub log_written: u64,
+    pub log_queue_depth: u64,
+    pub log_queue_capacity: u64,
     pub rate_limit_triggers: u64,
     pub challenge_tokens_issued: u64,
     pub challenge_tokens_verified: u64,
@@ -307,6 +407,35 @@ pub struct MetricsSnapshot {
 
 /// Global metrics instance.
 pub static METRICS: LazyLock<Metrics> = LazyLock::new(Metrics::new);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_queue_metrics_are_exported_without_dynamic_labels() {
+        let metrics = Metrics::new();
+        metrics.log_queue_submitted.store(7, Ordering::Relaxed);
+        metrics.log_queue_dropped.store(2, Ordering::Relaxed);
+        metrics
+            .log_queue_security_dropped
+            .store(1, Ordering::Relaxed);
+        metrics.log_queue_depth.store(3, Ordering::Relaxed);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.log_queue_capacity, LOG_QUEUE_CAPACITY as u64);
+        assert_eq!(snapshot.log_queue_depth, 3);
+        assert_eq!(snapshot.log_queue_submitted, 7);
+        assert_eq!(snapshot.log_queue_dropped, 2);
+        assert_eq!(snapshot.log_queue_security_dropped, 1);
+
+        let output = metrics.prometheus_output();
+        assert!(output.contains("biubo_log_queue_capacity 8192\n"));
+        assert!(output.contains("biubo_log_queue_submitted 7\n"));
+        assert!(output.contains("biubo_log_queue_dropped 2\n"));
+        assert!(!output.contains("host=\""));
+    }
+}
 
 /// Convenience macro to record latency in a block scope.
 ///

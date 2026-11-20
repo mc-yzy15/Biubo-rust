@@ -112,7 +112,20 @@
     "wafStatus": "WAF Status",
     "save": "Save",
     "saveSuccess": "Saved successfully",
-    "saveFailed": "Save failed"
+    "saveFailed": "Save failed",
+    "runtimeQueues": "Runtime Queue Health",
+    "detectionQueue": "Async Detection Queue",
+    "logQueue": "Log Writer Queue",
+    "healthy": "Healthy",
+    "degraded": "Degraded",
+    "unavailable": "Unavailable",
+    "inFlight": "In flight",
+    "completed": "Completed",
+    "rejected": "Rejected",
+    "written": "Written",
+    "dropped": "Dropped",
+    "securityDropped": "Security dropped",
+    "writeErrors": "Write errors"
   },
   "globe": {
     "threatStats": "Threat Stats",

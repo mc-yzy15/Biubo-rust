@@ -195,41 +195,8 @@ async fn main() {
 
     let app = create_app_with_async_detection(settings.clone(), async_detection_queue);
 
-    let _shutdown_signal = {
-        use tokio::signal;
-
-        #[cfg(unix)]
-        let sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => Box::pin(async move {
-                sig.recv().await;
-            })
-                as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to register SIGTERM handler ({}), using only SIGINT",
-                    e
-                );
-                Box::pin(std::future::pending::<()>())
-                    as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-            }
-        };
-        #[cfg(not(unix))]
-        let sigterm = Box::pin(std::future::pending::<()>())
-            as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
-
-        async move {
-            tokio::select! {
-                _ = signal::ctrl_c() => {
-                    tracing::info!("Received SIGINT, shutting down gracefully...");
-                }
-                _ = sigterm => {
-                    tracing::info!("Received SIGTERM, shutting down gracefully...");
-                }
-            }
-            // Flush all ProxyDB instances before exit
-            crate::data::storage::manager::flush_all().await;
-        }
-    };
+    #[cfg(feature = "ssl-support")]
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     #[cfg(feature = "ssl-support")]
     if ssl_enabled && !ssl_domains.is_empty() && !ssl_acme_email.is_empty() {
@@ -254,8 +221,12 @@ async fn main() {
 
         tracing::info!("HTTP redirect server serving on 0.0.0.0:{} -> HTTPS", port);
 
-        tokio::spawn(async move {
-            if let Err(e) = axum::serve(redirect_listener, redirect_app).await {
+        let redirect_shutdown_rx = shutdown_rx.clone();
+        let redirect_server = tokio::spawn(async move {
+            if let Err(e) = axum::serve(redirect_listener, redirect_app)
+                .with_graceful_shutdown(shutdown_from_watch(redirect_shutdown_rx))
+                .await
+            {
                 tracing::error!("HTTP redirect server error: {}", e);
             }
         });
@@ -286,36 +257,66 @@ async fn main() {
                 .expect("TLS config not available"),
         ));
 
+        let mut connections = tokio::task::JoinSet::new();
+        let mut shutdown_signal = Box::pin(wait_for_shutdown_signal());
         loop {
-            let (tcp_stream, peer_addr) = match tls_listener.accept().await {
-                Ok(tuple) => tuple,
-                Err(e) => {
-                    tracing::error!("Failed to accept TLS connection: {}", e);
-                    continue;
+            tokio::select! {
+                _ = &mut shutdown_signal => {
+                    crate::api::routes::internal::mark_draining();
+                    shutdown_tx.send_replace(true);
+                    break;
                 }
-            };
+                accepted = tls_listener.accept() => {
+                    let (tcp_stream, peer_addr) = match accepted {
+                        Ok(connection) => connection,
+                        Err(e) => {
+                            tracing::error!("Failed to accept TLS connection: {}", e);
+                            continue;
+                        }
+                    };
+                    let tls_acceptor = tls_acceptor.clone();
+                    let app = app.clone();
+                    let shutdown_rx = shutdown_rx.clone();
+                    connections.spawn(async move {
+                        let handshake_shutdown = shutdown_rx.clone();
+                        let tls_stream = tokio::select! {
+                            result = tls_acceptor.accept(tcp_stream) => match result {
+                                Ok(stream) => stream,
+                                Err(e) => {
+                                    tracing::warn!("TLS handshake failed for {}: {}", peer_addr, e);
+                                    return;
+                                }
+                            },
+                            _ = shutdown_from_watch(handshake_shutdown) => return,
+                        };
 
-            let tls_acceptor = tls_acceptor.clone();
-            let app = app.clone();
-
-            tokio::spawn(async move {
-                match tls_acceptor.accept(tcp_stream).await {
-                    Ok(tls_stream) => {
-                        let _ = axum::serve(
+                        if let Err(e) = axum::serve(
                             TlsListenerWrapper {
                                 tls_stream: Some(tls_stream),
                                 peer_addr,
                             },
                             app,
                         )
-                        .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("TLS handshake failed for {}: {}", peer_addr, e);
-                    }
+                        .with_graceful_shutdown(shutdown_from_watch(shutdown_rx))
+                        .await
+                        {
+                            tracing::error!("TLS connection server error for {}: {}", peer_addr, e);
+                        }
+                    });
                 }
-            });
+            }
         }
+
+        while let Some(result) = connections.join_next().await {
+            if let Err(e) = result {
+                tracing::error!("TLS connection task failed: {}", e);
+            }
+        }
+
+        if let Err(e) = redirect_server.await {
+            tracing::error!("HTTP redirect server task failed: {}", e);
+        }
+        crate::data::storage::manager::flush_all().await;
     } else {
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
         tracing::info!("Serving on host 0.0.0.0, port {}...", port);
@@ -328,9 +329,16 @@ async fn main() {
             }
         };
 
-        if let Err(e) = axum::serve(listener, app).await {
+        if let Err(e) = axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                wait_for_shutdown_signal().await;
+                crate::api::routes::internal::mark_draining();
+            })
+            .await
+        {
             tracing::error!("Server error: {}", e);
         }
+        crate::data::storage::manager::flush_all().await;
     }
 
     #[cfg(not(feature = "ssl-support"))]
@@ -391,5 +399,75 @@ impl axum::serve::Listener for TlsListenerWrapper {
 
     fn local_addr(&self) -> std::io::Result<Self::Addr> {
         Ok(self.peer_addr)
+    }
+}
+
+#[cfg(feature = "ssl-support")]
+async fn shutdown_from_watch(mut shutdown: tokio::sync::watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    let _ = shutdown.changed().await;
+}
+
+async fn wait_for_shutdown_signal() {
+    use tokio::signal;
+
+    #[cfg(unix)]
+    {
+        let mut sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(signal) => Some(signal),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to register SIGTERM handler ({}), using only SIGINT",
+                    e
+                );
+                None
+            }
+        };
+
+        tokio::select! {
+            _ = signal::ctrl_c() => tracing::info!("Received SIGINT, shutting down gracefully..."),
+            _ = async {
+                if let Some(signal) = sigterm.as_mut() {
+                    signal.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => tracing::info!("Received SIGTERM, shutting down gracefully..."),
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let mut ctrl_break = match signal::windows::ctrl_break() {
+            Ok(signal) => Some(signal),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to register Ctrl-Break handler ({}), using Ctrl-C",
+                    e
+                );
+                None
+            }
+        };
+
+        tokio::select! {
+            _ = signal::ctrl_c() => tracing::info!("Received Ctrl-C, shutting down gracefully..."),
+            _ = async {
+                if let Some(signal) = ctrl_break.as_mut() {
+                    signal.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => tracing::info!("Received Ctrl-Break, shutting down gracefully..."),
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        if let Err(e) = signal::ctrl_c().await {
+            tracing::warn!("Failed to receive Ctrl-C signal: {}", e);
+        }
+        tracing::info!("Received Ctrl-C, shutting down gracefully...");
     }
 }

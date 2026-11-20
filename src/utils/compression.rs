@@ -79,44 +79,77 @@ pub fn decompress_json(data: &[u8]) -> serde_json::Value {
 }
 
 pub fn decode_content(content: &[u8], encoding: &str) -> Vec<u8> {
+    decode_content_with_limit(content, encoding, usize::MAX).unwrap_or_default()
+}
+
+/// Decode request content while bounding the decompressed output size.
+///
+/// Malformed/unsupported encodings preserve the legacy behavior of passing
+/// through the original bytes. Exceeding the output limit is an explicit
+/// error so callers can reject decompression bombs instead of buffering them.
+pub fn decode_content_with_limit(
+    content: &[u8],
+    encoding: &str,
+    max_decoded_size: usize,
+) -> Result<Vec<u8>, &'static str> {
     if content.is_empty() || encoding.is_empty() {
-        return content.to_vec();
+        return if content.len() <= max_decoded_size {
+            Ok(content.to_vec())
+        } else {
+            Err("decoded content exceeds size limit")
+        };
     }
 
-    match encoding.to_lowercase().as_str() {
-        "gzip" => {
-            let mut decoder = GzDecoder::new(content);
-            let mut decoded = Vec::new();
-            match decoder.read_to_end(&mut decoded) {
-                Ok(_) => decoded,
-                Err(e) => {
-                    tracing::error!("Decompress failed (gzip): {}", e);
-                    content.to_vec()
-                }
+    let encoding = encoding.to_ascii_lowercase();
+    let decoder: Box<dyn Read + '_> = match encoding.as_str() {
+        "gzip" => Box::new(GzDecoder::new(content)),
+        "deflate" => Box::new(ZlibDecoder::new(content)),
+        "br" => Box::new(brotli::Decompressor::new(content, 4096)),
+        _ => {
+            return if content.len() <= max_decoded_size {
+                Ok(content.to_vec())
+            } else {
+                Err("request content exceeds size limit")
+            };
+        }
+    };
+
+    let read_limit = max_decoded_size.saturating_add(1) as u64;
+    let mut decoded = Vec::with_capacity(content.len().min(max_decoded_size));
+    match decoder.take(read_limit).read_to_end(&mut decoded) {
+        Ok(_) if decoded.len() > max_decoded_size => Err("decoded content exceeds size limit"),
+        Ok(_) => Ok(decoded),
+        Err(e) => {
+            tracing::error!("Decompress failed ({}): {}", encoding, e);
+            if content.len() <= max_decoded_size {
+                Ok(content.to_vec())
+            } else {
+                Err("request content exceeds size limit")
             }
         }
-        "deflate" => {
-            let mut decoder = ZlibDecoder::new(content);
-            let mut decoded = Vec::new();
-            match decoder.read_to_end(&mut decoded) {
-                Ok(_) => decoded,
-                Err(e) => {
-                    tracing::error!("Decompress failed (deflate): {}", e);
-                    content.to_vec()
-                }
-            }
-        }
-        "br" => {
-            let mut decoded = Vec::new();
-            let mut decoder = brotli::Decompressor::new(content, 4096);
-            match decoder.read_to_end(&mut decoded) {
-                Ok(_) => decoded,
-                Err(e) => {
-                    tracing::error!("Decompress failed (br): {}", e);
-                    content.to_vec()
-                }
-            }
-        }
-        _ => content.to_vec(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_decode_rejects_plain_body_over_limit() {
+        assert!(decode_content_with_limit(b"12345", "", 4).is_err());
+        assert_eq!(decode_content_with_limit(b"1234", "", 4).unwrap(), b"1234");
+    }
+
+    #[test]
+    fn bounded_decode_rejects_decompression_bomb_output() {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&vec![b'a'; 1024]).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        assert!(decode_content_with_limit(&compressed, "gzip", 128).is_err());
+        assert_eq!(
+            decode_content_with_limit(&compressed, "gzip", 1024).unwrap(),
+            vec![b'a'; 1024]
+        );
     }
 }

@@ -11,7 +11,14 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+static DRAINING: AtomicBool = AtomicBool::new(false);
+
+pub fn mark_draining() {
+    DRAINING.store(true, Ordering::SeqCst);
+}
 
 #[derive(Debug, Deserialize)]
 struct GreetingRequest {
@@ -83,6 +90,7 @@ pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_check))
         .route("/ready", get(ready_check))
+        .route("/runtime", get(runtime_status))
         .route("/metrics", get(metrics_handler))
         .route("/scripts/biubo/beacon.js", get(beacon))
         .route("/handle/biubo/greeting", post(greeting))
@@ -129,17 +137,58 @@ async fn ready_check(State(state): State<Arc<AppState>>) -> Response {
     let initialized = s.initialized;
     checks.insert("initialized".into(), json!(initialized));
 
-    let all_ready = llm_configured || !proxies_configured || initialized;
-    let status = if all_ready { "ok" } else { "degraded" };
+    let detection_queue_full = state
+        .async_detection_queue
+        .as_ref()
+        .map(|queue| {
+            let snapshot = queue.snapshot();
+            snapshot.capacity > 0 && snapshot.queued >= snapshot.capacity
+        })
+        .unwrap_or(false);
+    checks.insert("detection_queue_full".into(), json!(detection_queue_full));
+
+    let draining = DRAINING.load(Ordering::SeqCst);
+    checks.insert("draining".into(), json!(draining));
+
+    let all_ready = (llm_configured || !proxies_configured || initialized) && !detection_queue_full;
+    let status = if draining {
+        "draining"
+    } else if all_ready {
+        "ok"
+    } else {
+        "degraded"
+    };
     checks.insert("status".into(), json!(status));
 
-    let http_status = if all_ready {
+    let http_status = if all_ready && !draining {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
 
     (http_status, Json(json!(checks))).into_response()
+}
+
+async fn runtime_status(State(state): State<Arc<AppState>>) -> Response {
+    let detection = state
+        .async_detection_queue
+        .as_ref()
+        .map(|queue| queue.snapshot());
+    let metrics = METRICS.snapshot();
+    Json(json!({
+        "status": "ok",
+        "detection_queue": detection,
+        "log_queue": {
+            "capacity": metrics.log_queue_capacity,
+            "depth": metrics.log_queue_depth,
+            "submitted": metrics.log_queue_submitted,
+            "written": metrics.log_written,
+            "dropped": metrics.log_queue_dropped,
+            "security_dropped": metrics.log_queue_security_dropped,
+            "write_errors": metrics.log_write_errors,
+        }
+    }))
+    .into_response()
 }
 
 async fn beacon(State(state): State<Arc<AppState>>) -> Response {
@@ -582,4 +631,55 @@ async fn metrics_handler() -> Response {
         output,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::app::AppState;
+    use crate::config::settings::Settings;
+    use crate::core::reputation::aggregator::ReputationAggregator;
+    use crate::core::reputation::manager::ReputationManager;
+    use axum::body::to_bytes;
+    use std::sync::atomic::Ordering;
+
+    fn test_state() -> Arc<AppState> {
+        Arc::new(AppState {
+            settings: Arc::new(parking_lot::RwLock::new(Arc::new(Settings::default()))),
+            error_pages: Default::default(),
+            async_detection_queue: None,
+            event_broadcaster: crate::api::routes::waf_events::EventBroadcaster::new(),
+            reputation_aggregator: ReputationAggregator::with_defaults(),
+            reputation_manager: ReputationManager::new(&[]),
+        })
+    }
+
+    #[tokio::test]
+    async fn draining_marks_unready_but_keeps_health_alive() {
+        DRAINING.store(false, Ordering::SeqCst);
+        let state = test_state();
+
+        let ready = ready_check(State(state.clone())).await;
+        assert_eq!(ready.status(), StatusCode::OK);
+        let body = to_bytes(ready.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["draining"], false);
+        assert_eq!(payload["status"], "ok");
+
+        mark_draining();
+        let ready = ready_check(State(state)).await;
+        assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(ready.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["draining"], true);
+        assert_eq!(payload["status"], "draining");
+
+        let health = health_check().await;
+        assert_eq!(health.status(), StatusCode::OK);
+        let body = to_bytes(health.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["status"], "ok");
+
+        DRAINING.store(false, Ordering::SeqCst);
+    }
 }

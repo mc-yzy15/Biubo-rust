@@ -15,6 +15,27 @@ static PINNED_HTTP_CLIENTS: once_cell::sync::Lazy<moka::sync::Cache<String, reqw
             .build()
     });
 
+const MAX_SEND_RETRIES: usize = 2;
+const RETRY_BACKOFF_BASE: std::time::Duration = std::time::Duration::from_millis(25);
+
+fn is_idempotent_method(method: &reqwest::Method) -> bool {
+    matches!(
+        *method,
+        reqwest::Method::GET
+            | reqwest::Method::HEAD
+            | reqwest::Method::OPTIONS
+            | reqwest::Method::TRACE
+            | reqwest::Method::PUT
+            | reqwest::Method::DELETE
+    )
+}
+
+fn should_retry_send_error(is_connect: bool, is_timeout: bool, idempotent: bool) -> bool {
+    // A connection-establishment failure occurs before an HTTP request can be
+    // delivered. A timeout is ambiguous, so retry it only for idempotent methods.
+    is_connect || (is_timeout && idempotent)
+}
+
 fn build_http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -142,24 +163,59 @@ pub async fn forward_request(
         }
     };
 
-    let mut req_builder = client.request(method.parse::<reqwest::Method>()?, &target_url);
+    let req_method = method.parse::<reqwest::Method>()?;
+    let idempotent = is_idempotent_method(&req_method);
+    let cookie_header = if cookies.is_empty() {
+        None
+    } else {
+        Some(
+            cookies
+                .iter()
+                .map(|(key, value)| format!("{}={}", key, value))
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    };
 
-    for (key, value) in &req_headers {
-        req_builder = req_builder.header(key.as_str(), value.as_str());
-    }
+    let mut retries = 0;
+    let resp = loop {
+        let mut req_builder = client.request(req_method.clone(), &target_url);
 
-    if !cookies.is_empty() {
-        let cookie_header = cookies
-            .iter()
-            .map(|(key, value)| format!("{}={}", key, value))
-            .collect::<Vec<_>>()
-            .join("; ");
-        req_builder = req_builder.header("Cookie", &cookie_header);
-    }
+        for (key, value) in &req_headers {
+            req_builder = req_builder.header(key.as_str(), value.as_str());
+        }
 
-    req_builder = req_builder.body(data.to_vec());
+        if let Some(cookie_header) = &cookie_header {
+            req_builder = req_builder.header("Cookie", cookie_header);
+        }
 
-    let resp = req_builder.send().await?;
+        let result = req_builder.body(data.to_vec()).send().await;
+        match result {
+            Ok(resp) => break resp,
+            Err(error)
+                if retries < MAX_SEND_RETRIES
+                    && should_retry_send_error(
+                        error.is_connect(),
+                        error.is_timeout(),
+                        idempotent,
+                    ) =>
+            {
+                let delay = RETRY_BACKOFF_BASE * (retries as u32 + 1);
+                retries += 1;
+                tracing::debug!(
+                    target = %target_url,
+                    method = %req_method,
+                    retry = retries,
+                    max_retries = MAX_SEND_RETRIES,
+                    ?delay,
+                    error = %error,
+                    "Retrying upstream request after a pre-response transport error"
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
 
     let status = resp.status().as_u16();
 
@@ -186,4 +242,37 @@ pub async fn forward_request(
         status,
         headers: resp_headers,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_idempotent_method, should_retry_send_error, MAX_SEND_RETRIES};
+
+    #[test]
+    fn retries_connection_failures_for_any_method() {
+        assert!(should_retry_send_error(true, false, false));
+        assert!(should_retry_send_error(true, true, false));
+    }
+
+    #[test]
+    fn retries_timeouts_only_for_idempotent_methods() {
+        assert!(should_retry_send_error(false, true, true));
+        assert!(!should_retry_send_error(false, true, false));
+        assert!(!should_retry_send_error(false, false, true));
+    }
+
+    #[test]
+    fn identifies_http_idempotent_methods() {
+        for method in ["GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE"] {
+            assert!(is_idempotent_method(&method.parse().unwrap()), "{method}");
+        }
+        for method in ["POST", "PATCH"] {
+            assert!(!is_idempotent_method(&method.parse().unwrap()), "{method}");
+        }
+    }
+
+    #[test]
+    fn retry_count_is_finite() {
+        assert_eq!(MAX_SEND_RETRIES, 2);
+    }
 }

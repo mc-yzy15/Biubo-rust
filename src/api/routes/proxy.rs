@@ -9,7 +9,6 @@ use crate::core::security::rate_limit::{check_cc_attack, check_rate_limit, Block
 use crate::core::session::manager::{build_log_entry, create_session};
 use crate::data::storage::manager::get_db;
 use crate::services::proxy::forwarder::forward_request;
-use crate::utils::compression::decode_content;
 use crate::utils::http_utils::{get_client_ip_with_trust, is_static_resource};
 use axum::body::Body;
 use axum::extract::State;
@@ -174,23 +173,49 @@ async fn reverse_proxy(
     };
 
     let decoded_body = {
-        let body_result = axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await;
-        match body_result {
-            Ok(bytes) => {
-                let body_bytes = bytes.to_vec();
-                if body_bytes.is_empty() {
-                    Vec::new()
-                } else {
-                    decode_content(&body_bytes, &content_encoding)
-                }
+        // Bound both the encoded request and its decompressed representation.
+        // Read one byte beyond the configured limit so an oversized stream is
+        // rejected instead of silently treated as an empty request.
+        let body_result =
+            axum::body::to_bytes(req.into_body(), upload_max_size.saturating_add(1)).await;
+        let body_bytes = match body_result {
+            Ok(bytes) if bytes.len() <= upload_max_size => bytes,
+            Ok(_) => {
+                tracing::warn!("Request body exceeded configured limit from {}", client_ip);
+                METRICS
+                    .request_body_rejections
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return (StatusCode::PAYLOAD_TOO_LARGE, "Request body too large").into_response();
             }
             Err(e) => {
                 tracing::warn!(
-                    "Request body read failed (possible attack or oversized payload): {} from {}",
+                    "Request body read failed (possible oversized payload): {} from {}",
                     e,
                     client_ip
                 );
-                Vec::new()
+                METRICS
+                    .request_body_rejections
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return (StatusCode::PAYLOAD_TOO_LARGE, "Request body too large").into_response();
+            }
+        };
+
+        match crate::utils::compression::decode_content_with_limit(
+            &body_bytes,
+            &content_encoding,
+            upload_max_size,
+        ) {
+            Ok(body) => body,
+            Err(reason) => {
+                tracing::warn!(
+                    "Rejected oversized request body from {}: {}",
+                    client_ip,
+                    reason
+                );
+                METRICS
+                    .request_body_rejections
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return (StatusCode::PAYLOAD_TOO_LARGE, "Request body too large").into_response();
             }
         }
     };
