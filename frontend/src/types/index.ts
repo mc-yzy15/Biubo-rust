@@ -94,6 +94,7 @@ export interface ProxySite {
 }
 
 export interface SettingsConfig {
+  ADVANCED_RULES_SHADOW_MODE?: boolean;
   DASHBOARD_PASSWORD: string;
   API_KEY: string;
   LLM_MODEL: string;

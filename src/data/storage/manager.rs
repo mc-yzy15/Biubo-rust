@@ -723,6 +723,25 @@ impl ProxyDB {
         }
     }
 
+    /// Fetch a newest-first page directly from indexed storage without materializing
+    /// the entire log history in the API process.
+    pub fn get_logs_page<F>(
+        &self,
+        offset: usize,
+        limit: usize,
+        predicate: F,
+    ) -> (Vec<serde_json::Value>, usize)
+    where
+        F: FnMut(&serde_json::Value) -> bool,
+    {
+        let _ = self.ensure_log_db();
+        let log_db = self.log_db.lock();
+        match *log_db {
+            Some(ref db) => db.get_indexed_page("log_index", "log:", offset, limit, predicate),
+            None => (Vec::new(), 0),
+        }
+    }
+
     pub fn find_log_by_request_id(&self, id: &str) -> Option<serde_json::Value> {
         let _ = self.ensure_log_db();
         let log_db = self.log_db.lock();

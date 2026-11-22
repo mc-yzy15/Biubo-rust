@@ -26,6 +26,7 @@ export interface UseSettingsReturn {
   setProxyList: (list: ProxySite[]) => void
   updateField: <K extends keyof SettingsConfig>(key: K, value: SettingsConfig[K]) => void
   saveConfig: () => Promise<boolean>
+  rollbackConfig: () => Promise<boolean>
 }
 
 export function useSettings(): UseSettingsReturn {
@@ -72,7 +73,14 @@ export function useSettings(): UseSettingsReturn {
         LLM_MODEL: config.LLM_MODEL || '',
         LLM_BASE_URL: config.LLM_BASE_URL || '',
         PROXY_MAP: proxyMap,
+        ADVANCED_RULES_SHADOW_MODE: Boolean(config.ADVANCED_RULES_SHADOW_MODE),
       }
+
+      const validation = await api.post<{ status: string; data?: { valid?: boolean } }>(
+        `${API_ENDPOINT}/validate`,
+        payload,
+      )
+      if (validation.status !== 'success' || validation.data?.valid !== true) return false
 
       const res = await api.post<{ status: string; msg?: string }>(API_ENDPOINT, payload)
       if (res.status === 'success') {
@@ -90,6 +98,22 @@ export function useSettings(): UseSettingsReturn {
     }
   }, [config, proxyList, loadConfig])
 
+  const rollbackConfig = useCallback(async (): Promise<boolean> => {
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await api.post<{ status: string }>(`${API_ENDPOINT}/rollback`, {})
+      if (res.status !== 'success') return false
+      await loadConfig()
+      return true
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Rollback failed')
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }, [loadConfig])
+
   return {
     config,
     proxyList,
@@ -100,5 +124,6 @@ export function useSettings(): UseSettingsReturn {
     setProxyList,
     updateField,
     saveConfig,
+    rollbackConfig,
   }
 }

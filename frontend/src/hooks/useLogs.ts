@@ -41,6 +41,7 @@ function logMatchesType(log: Log, filter: LogTypeFilter): boolean {
 
 export function useLogs(host: string | null) {
   const [allLogs, setAllLogs] = useState<Log[]>([])
+  const [totalRecords, setTotalRecords] = useState(0)
   const [searchLogs, setSearchLogs] = useState<Log[]>([])
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -55,11 +56,24 @@ export function useLogs(host: string | null) {
   const [hasReplayData, setHasReplayData] = useState(false)
   const requestIdRef = useRef(0)
   const fetchIdRef = useRef(0)
+  const previousHostRef = useRef(host)
+
+  useEffect(() => {
+    if (previousHostRef.current !== host) {
+      previousHostRef.current = host
+      fetchIdRef.current += 1
+      setPage(1)
+      setSearchMode(false)
+      setSearchLogs([])
+      setSearchQuery('')
+    }
+  }, [host])
 
   const loadLogs = useCallback(async () => {
     const fetchId = ++fetchIdRef.current
     if (!host) {
       setAllLogs([])
+      setTotalRecords(0)
       setSearchLogs([])
       setSearchMode(false)
       setError(null)
@@ -68,37 +82,40 @@ export function useLogs(host: string | null) {
 
     setLoading(true)
     setError(null)
-    setAllLogs([])
-    setSearchLogs([])
-    setSearchMode(false)
-    setPage(1)
     try {
-      const url = `${WAF_BASE}/info/biubo/log?host=${encodeURIComponent(host)}`
-      const data = await readApiData<{ logs?: Log[] } | Log[]>(await fetch(url))
+      const params = new URLSearchParams({
+        host,
+        limit: String(LOG_PAGE_SIZE),
+        offset: String((page - 1) * LOG_PAGE_SIZE),
+        type: typeFilter,
+      })
+      const data = await readApiData<{ logs?: Log[]; total?: number } | Log[]>(
+        await fetch(`${WAF_BASE}/info/biubo/log?${params}`),
+      )
       const logs = Array.isArray(data) ? data : Array.isArray(data?.logs) ? data.logs : []
       logs.sort((a, b) => logTimestamp(b) - logTimestamp(a))
       if (fetchId !== fetchIdRef.current) return
       setAllLogs(logs)
-      setSearchMode(false)
-      setPage(1)
+      setTotalRecords(Array.isArray(data) ? logs.length : Number(data.total ?? logs.length))
     } catch (e: unknown) {
       if (fetchId === fetchIdRef.current) setError(e instanceof Error ? e.message : 'Request failed')
     } finally {
       if (fetchId === fetchIdRef.current) setLoading(false)
     }
-  }, [host])
+  }, [host, page, typeFilter])
 
   useEffect(() => {
-    void loadLogs()
-  }, [loadLogs])
+    if (!searchMode) void loadLogs()
+  }, [loadLogs, searchMode])
 
-  const sourceLogs = searchMode ? searchLogs : allLogs
-  const filteredLogs = useMemo(
-    () => sourceLogs.filter(log => logMatchesType(log, typeFilter)),
-    [sourceLogs, typeFilter],
+  const filteredSearchLogs = useMemo(
+    () => searchLogs.filter(log => logMatchesType(log, typeFilter)),
+    [searchLogs, typeFilter],
   )
-  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / LOG_PAGE_SIZE))
-  const pageLogs = filteredLogs.slice((page - 1) * LOG_PAGE_SIZE, page * LOG_PAGE_SIZE)
+  const totalPages = Math.max(1, Math.ceil((searchMode ? filteredSearchLogs.length : totalRecords) / LOG_PAGE_SIZE))
+  const pageLogs = searchMode
+    ? filteredSearchLogs.slice((page - 1) * LOG_PAGE_SIZE, page * LOG_PAGE_SIZE)
+    : allLogs
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages)
@@ -198,7 +215,7 @@ export function useLogs(host: string | null) {
     page,
     totalPages,
     pageLogs,
-    filteredCount: filteredLogs.length,
+    filteredCount: searchMode ? filteredSearchLogs.length : totalRecords,
     loading,
     error,
     selectedLog,

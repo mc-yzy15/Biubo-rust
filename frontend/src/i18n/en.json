@@ -136,7 +136,11 @@
     "written": "Written",
     "dropped": "Dropped",
     "securityDropped": "Security dropped",
-    "writeErrors": "Write errors"
+    "writeErrors": "Write errors",
+    "ruleShadowMode": "Advanced Rule Shadow Mode",
+    "ruleShadowEnabled": "Matches are observed but do not block on advanced rules",
+    "shadowMatchedRequests": "Matched requests",
+    "shadowRuleHits": "Rule hits"
   },
   "globe": {
     "threatStats": "Threat Stats",
@@ -183,6 +187,13 @@
     "atLeastOneProxy": "Keep at least one proxy site",
     "saveSuccess": "Settings saved successfully",
     "saveFailed": "Save failed",
+    "rollbackConfig": "Rollback last change",
+    "rollbackConfirm": "Restore the previous saved configuration?",
+    "rollbackSuccess": "Configuration rolled back",
+    "rollbackFailed": "Rollback failed",
+    "advancedRulesShadow": "Advanced Rule Safety",
+    "advancedRulesShadowLabel": "Audit advanced-rule matches without blocking",
+    "advancedRulesShadowHelp": "Use this to evaluate rule coverage before enforcement. Existing regex and LLM decisions remain active.",
     "unknownError": "Unknown error"
   },
   "common": {

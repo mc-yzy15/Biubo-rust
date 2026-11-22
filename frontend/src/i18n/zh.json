@@ -136,7 +136,11 @@
     "written": "已写入",
     "dropped": "已丢弃",
     "securityDropped": "安全日志丢弃",
-    "writeErrors": "写入错误"
+    "writeErrors": "写入错误",
+    "ruleShadowMode": "高级规则影子模式",
+    "ruleShadowEnabled": "观察规则命中但不通过高级规则拦截",
+    "shadowMatchedRequests": "命中请求数",
+    "shadowRuleHits": "规则命中数"
   },
   "globe": {
     "threatStats": "威胁统计",
@@ -183,6 +187,13 @@
     "atLeastOneProxy": "至少保留一个代理站点",
     "saveSuccess": "设置保存成功",
     "saveFailed": "保存失败",
+    "rollbackConfig": "回滚上次配置",
+    "rollbackConfirm": "确定恢复到上次保存的配置吗？",
+    "rollbackSuccess": "配置已回滚",
+    "rollbackFailed": "配置回滚失败",
+    "advancedRulesShadow": "高级规则安全模式",
+    "advancedRulesShadowLabel": "仅审计高级规则命中，不执行拦截",
+    "advancedRulesShadowHelp": "可先观察规则覆盖情况再启用拦截；原有正则与 LLM 判定仍然生效。",
     "unknownError": "未知原因"
   },
   "common": {

@@ -63,6 +63,10 @@ struct GeocodeQuery {
 struct DateQuery {
     host: Option<String>,
     date: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    #[serde(rename = "type")]
+    log_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -435,17 +439,62 @@ async fn waf_log(State(_state): State<Arc<AppState>>, Query(query): Query<DateQu
     }
 
     let db = get_db(&host);
-    let logs = db.get_logs();
     let overview = db
         .get_log_db()
         .and_then(|ldb| ldb.get("overview"))
         .unwrap_or(json!({}));
 
+    if let Some(limit) = query.limit {
+        const MAX_LOG_PAGE_SIZE: usize = 200;
+        let limit = limit.clamp(1, MAX_LOG_PAGE_SIZE);
+        let requested_offset = query.offset.unwrap_or(0);
+        let (logs, total) = db.get_logs_page(requested_offset, limit, |log| {
+            query
+                .log_type
+                .as_deref()
+                .map(|filter| log_matches_type(log, filter))
+                .unwrap_or(true)
+        });
+        let offset = requested_offset.min(total);
+
+        return Json(ApiResponse::success(serde_json::json!({
+            "logs": logs,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset.saturating_add(limit) < total,
+            "overview": overview,
+        })))
+        .into_response();
+    }
+
+    let logs = db.get_logs();
     Json(ApiResponse::success(serde_json::json!({
         "logs": logs,
         "overview": overview,
     })))
     .into_response()
+}
+
+fn log_matches_type(log: &Value, filter: &str) -> bool {
+    let log_type = log
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let has_attack = log
+        .get("attack_types")
+        .and_then(Value::as_array)
+        .map(|types| !types.is_empty())
+        .unwrap_or(false);
+
+    match filter.to_ascii_lowercase().as_str() {
+        "all" => true,
+        "hacker" => log_type == "hacker" || has_attack,
+        "challenge" => matches!(log_type.as_str(), "challenge" | "challenged"),
+        "normal" => log_type == "normal" && !has_attack,
+        _ => true,
+    }
 }
 
 async fn waf_rrweb(
@@ -652,6 +701,27 @@ mod tests {
             reputation_aggregator: ReputationAggregator::with_defaults(),
             reputation_manager: ReputationManager::new(&[]),
         })
+    }
+
+    #[test]
+    fn paginated_log_filters_match_dashboard_types() {
+        assert!(log_matches_type(
+            &json!({"type":"HACKER", "attack_types":[]}),
+            "hacker"
+        ));
+        assert!(log_matches_type(
+            &json!({"type":"normal", "attack_types":["xss"]}),
+            "hacker"
+        ));
+        assert!(log_matches_type(
+            &json!({"type":"challenged", "attack_types":[]}),
+            "challenge"
+        ));
+        assert!(!log_matches_type(
+            &json!({"type":"normal", "attack_types":[]}),
+            "hacker"
+        ));
+        assert!(log_matches_type(&json!({"type":"normal"}), "unknown"));
     }
 
     #[tokio::test]

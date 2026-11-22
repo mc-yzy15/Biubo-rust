@@ -15,7 +15,7 @@ let toastId = 0
 
 export function SettingsTab() {
   const { t } = useTranslation()
-  const { config, proxyList, loading, saving, error, loadConfig, setProxyList, updateField, saveConfig } = useSettings()
+  const { config, proxyList, loading, saving, error, loadConfig, setProxyList, updateField, saveConfig, rollbackConfig } = useSettings()
   const [toasts, setToasts] = useState<ToastItem[]>([])
 
   useEffect(() => {
@@ -45,6 +45,12 @@ export function SettingsTab() {
     } else {
       showToast(t('settings.saveFailed'), 'err')
     }
+  }
+
+  const handleRollback = async () => {
+    if (!window.confirm(t('settings.rollbackConfirm'))) return
+    const success = await rollbackConfig()
+    showToast(success ? t('settings.rollbackSuccess') : t('settings.rollbackFailed'), success ? 'ok' : 'err')
   }
 
   const handleAddProxy = () => {
@@ -105,9 +111,29 @@ export function SettingsTab() {
           onChange={(field, value) => updateField(field, value)}
         />
 
-        <div className="st-footer">
+        <div className="st-group">
+          <div className="st-header">{t('settings.advancedRulesShadow')}</div>
+          <label className="st-row">
+            <div className="st-lbl">{t('settings.advancedRulesShadowLabel')}</div>
+            <div className="st-ctrl">
+              <input
+                type="checkbox"
+                checked={Boolean(config.ADVANCED_RULES_SHADOW_MODE)}
+                onChange={(event) => updateField('ADVANCED_RULES_SHADOW_MODE', event.target.checked)}
+              />
+            </div>
+          </label>
+          <div style={{ color: 'var(--dim)', fontSize: 13, marginTop: 8 }}>
+            {t('settings.advancedRulesShadowHelp')}
+          </div>
+        </div>
+
+        <div className="st-footer" style={{ display: 'flex', gap: 10 }}>
           <button className="st-btn-save" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : t('settings.saveConfig')}
+          </button>
+          <button className="tb-btn" onClick={() => void handleRollback()} disabled={saving}>
+            {t('settings.rollbackConfig')}
           </button>
         </div>
       </div>

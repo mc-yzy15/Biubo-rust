@@ -355,11 +355,15 @@ async fn main() {
         };
 
         if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal)
+            .with_graceful_shutdown(async {
+                wait_for_shutdown_signal().await;
+                crate::api::routes::internal::mark_draining();
+            })
             .await
         {
             tracing::error!("Server error: {}", e);
         }
+        crate::data::storage::manager::flush_all().await;
     }
 }
 

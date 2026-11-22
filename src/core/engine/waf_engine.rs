@@ -222,6 +222,59 @@ static CACHE_STATS: LazyLock<CacheStats> = LazyLock::new(|| CacheStats {
     compiled_cache_misses: AtomicU64::new(0),
 });
 
+#[cfg(feature = "advanced-rules")]
+static ADVANCED_RULES_SHADOW_REQUESTS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "advanced-rules")]
+static ADVANCED_RULES_SHADOW_RULE_HITS: AtomicU64 = AtomicU64::new(0);
+
+/// Aggregate shadow-mode counters, with no per-request or attacker-controlled labels.
+#[cfg(feature = "advanced-rules")]
+pub fn get_advanced_rules_shadow_stats() -> HashMap<String, u64> {
+    HashMap::from([
+        (
+            "shadow_matched_requests".to_string(),
+            ADVANCED_RULES_SHADOW_REQUESTS.load(Ordering::Relaxed),
+        ),
+        (
+            "shadow_rule_hits".to_string(),
+            ADVANCED_RULES_SHADOW_RULE_HITS.load(Ordering::Relaxed),
+        ),
+    ])
+}
+
+#[cfg(feature = "advanced-rules")]
+fn handle_advanced_rule_matches(
+    rule_matches: &[crate::core::rules::RuleMatch],
+    shadow_mode: bool,
+) -> Option<DetectionResult> {
+    let first_match = rule_matches.first()?;
+
+    if shadow_mode {
+        let request_count = ADVANCED_RULES_SHADOW_REQUESTS.fetch_add(1, Ordering::Relaxed);
+        ADVANCED_RULES_SHADOW_RULE_HITS.fetch_add(rule_matches.len() as u64, Ordering::Relaxed);
+        // Keep audit volume bounded even when a matching rule is hot.
+        if request_count % 1_000 == 0 {
+            tracing::debug!("Advanced rule shadow matches observed (sampled)");
+        }
+        None
+    } else {
+        tracing::info!(
+            rule_id = first_match.rule.id,
+            category = first_match.rule.category.as_str(),
+            "Rule match detected"
+        );
+        let attack_types = rule_matches
+            .iter()
+            .map(|m| m.rule.category.as_str().to_string())
+            .collect();
+        Some(DetectionResult::from_rule_match(
+            first_match.rule.id,
+            first_match.rule.category.as_str().to_string(),
+            attack_types,
+        ))
+    }
+}
+
 const LLM_SYSTEM_INSTRUCTION: &str = r#"You are an HTTP security analysis engine. Your job: distinguish real attacks from normal user behavior.
 
 ## The Core Intuition
@@ -530,39 +583,8 @@ pub async fn detect_request(
 
     let parsed_body = parse_body(body, &content_type);
 
-    #[cfg(feature = "advanced-rules")]
-    if let Some(rule_engine) = get_global_rule_engine() {
-        let waf_req = WafRequest {
-            url: url.to_string(),
-            method: method.to_string(),
-            headers: headers.clone(),
-            query_params: args.clone(),
-            body: parsed_body.clone(),
-            cookies: cookies.clone(),
-        };
-
-        let rule_matches = rule_engine.match_request(&waf_req);
-        if !rule_matches.is_empty() {
-            let first_match = &rule_matches[0];
-            let attack_types: Vec<String> = rule_matches
-                .iter()
-                .map(|m| m.rule.category.as_str().to_string())
-                .collect();
-
-            tracing::info!(
-                rule_id = first_match.rule.id,
-                category = first_match.rule.category.as_str(),
-                "Rule match detected"
-            );
-
-            return DetectionResult::from_rule_match(
-                first_match.rule.id,
-                first_match.rule.category.as_str().to_string(),
-                attack_types,
-            );
-        }
-    }
-
+    // The proxy evaluates advanced rules synchronously in quick_detect_request
+    // before this request can be queued for deep detection. Avoid a second match.
     let host_rules = get_host_rules(host);
 
     let (is_malicious, attack_types) =
@@ -982,19 +1004,10 @@ pub fn quick_detect_request(
             cookies: cookies.clone(),
         };
 
+        let shadow_mode = settings.rule_engine.shadow_mode;
         let rule_matches = rule_engine.match_request(&waf_req);
-        if !rule_matches.is_empty() {
-            let first_match = &rule_matches[0];
-            let attack_types: Vec<String> = rule_matches
-                .iter()
-                .map(|m| m.rule.category.as_str().to_string())
-                .collect();
-
-            return DetectionResult::from_rule_match(
-                first_match.rule.id,
-                first_match.rule.category.as_str().to_string(),
-                attack_types,
-            );
+        if let Some(detection) = handle_advanced_rule_matches(&rule_matches, shadow_mode) {
+            return detection;
         }
     }
 
@@ -1032,6 +1045,73 @@ pub fn quick_detect_request(
     }
 
     DetectionResult::normal()
+}
+
+#[cfg(all(test, feature = "advanced-rules"))]
+mod advanced_rules_shadow_tests {
+    use super::*;
+    use crate::core::rules::{Rule, RuleCategory, RuleMatch};
+    use std::sync::Mutex;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn sample_match() -> RuleMatch {
+        RuleMatch {
+            rule: Rule {
+                id: 42,
+                category: RuleCategory::Xss,
+                paranoia_level: 1,
+                severity: "high".to_string(),
+                description: "test rule".to_string(),
+                pattern: "test".to_string(),
+                mitre_id: None,
+                enabled: true,
+            },
+        }
+    }
+
+    #[test]
+    fn advanced_rule_shadow_match_does_not_change_detection_result() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let matches = vec![sample_match()];
+
+        assert!(handle_advanced_rule_matches(&matches, true).is_none());
+
+        let blocked = handle_advanced_rule_matches(&matches, false)
+            .expect("blocking mode should preserve the existing rule verdict");
+        assert_eq!(blocked.detection_type, "hacker");
+        assert_eq!(blocked.matched_rule_id, Some(42));
+        assert_eq!(blocked.matched_rule_category.as_deref(), Some("xss"));
+    }
+
+    #[test]
+    fn advanced_rule_shadow_match_only_increments_aggregate_counters() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let before = get_advanced_rules_shadow_stats();
+        let matches = vec![sample_match()];
+
+        assert!(handle_advanced_rule_matches(&matches, true).is_none());
+
+        let after = get_advanced_rules_shadow_stats();
+        assert_eq!(
+            after["shadow_matched_requests"],
+            before["shadow_matched_requests"] + 1
+        );
+        assert_eq!(
+            after["shadow_rule_hits"],
+            before["shadow_rule_hits"] + matches.len() as u64
+        );
+    }
+
+    #[test]
+    fn no_advanced_rule_matches_do_not_change_shadow_counters() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let before = get_advanced_rules_shadow_stats();
+
+        assert!(handle_advanced_rule_matches(&[], true).is_none());
+
+        assert_eq!(get_advanced_rules_shadow_stats(), before);
+    }
 }
 
 /// WAF 检测缓存 GC worker

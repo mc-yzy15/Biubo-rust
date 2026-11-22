@@ -106,6 +106,55 @@ impl Database {
         self.data.lock().get(key).cloned()
     }
 
+    /// Read a newest-first page from an indexed log collection while holding the
+    /// database lock once. The predicate is applied before calculating offsets,
+    /// so filtered pagination reports the correct total.
+    pub fn get_indexed_page<F>(
+        &self,
+        index_key: &str,
+        key_prefix: &str,
+        offset: usize,
+        limit: usize,
+        mut predicate: F,
+    ) -> (Vec<serde_json::Value>, usize)
+    where
+        F: FnMut(&serde_json::Value) -> bool,
+    {
+        let data = self.data.lock();
+        let Some(serde_json::Value::Array(ids)) = data.get(index_key) else {
+            let Some(serde_json::Value::Array(logs)) = data.get("logs") else {
+                return (Vec::new(), 0);
+            };
+
+            let mut page = Vec::with_capacity(limit);
+            let mut total = 0;
+            for entry in logs.iter().rev().filter(|entry| predicate(entry)) {
+                if total >= offset && page.len() < limit {
+                    page.push(entry.clone());
+                }
+                total += 1;
+            }
+            return (page, total);
+        };
+
+        let mut page = Vec::with_capacity(limit);
+        let mut total = 0;
+        for id in ids.iter().rev().filter_map(serde_json::Value::as_str) {
+            let key = format!("{key_prefix}{id}");
+            let Some(entry) = data.get(&key) else {
+                continue;
+            };
+            if !predicate(entry) {
+                continue;
+            }
+            if total >= offset && page.len() < limit {
+                page.push(entry.clone());
+            }
+            total += 1;
+        }
+        (page, total)
+    }
+
     pub fn set(&self, key: &str, value: serde_json::Value) {
         let mut guard = self.data.lock();
         guard.insert(key.to_string(), value);
@@ -240,5 +289,55 @@ fn spawn_flusher_thread(
 impl Drop for Database {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+#[cfg(test)]
+mod indexed_page_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn indexed_page_filters_before_offset_and_returns_newest_first() {
+        let path = std::env::temp_dir().join(format!(
+            "biubo-indexed-page-{}.msgpack",
+            uuid::Uuid::new_v4()
+        ));
+        let db = Database::new_with_pool(&path, false, 0).expect("create temporary database");
+        db.set("log_index", json!(["1", "2", "3", "4"]));
+        db.set("log:1", json!({"type":"normal", "id":1}));
+        db.set("log:2", json!({"type":"hacker", "id":2}));
+        db.set("log:3", json!({"type":"hacker", "id":3}));
+        db.set("log:4", json!({"type":"hacker", "id":4}));
+
+        let (page, total) = db.get_indexed_page("log_index", "log:", 1, 2, |entry| {
+            entry.get("type").and_then(serde_json::Value::as_str) == Some("hacker")
+        });
+
+        assert_eq!(total, 3);
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0]["id"], 3);
+        assert_eq!(page[1]["id"], 2);
+
+        drop(db);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn indexed_page_supports_legacy_log_arrays() {
+        let path = std::env::temp_dir().join(format!(
+            "biubo-legacy-page-{}.msgpack",
+            uuid::Uuid::new_v4()
+        ));
+        let db = Database::new_with_pool(&path, false, 0).expect("create temporary database");
+        db.set("logs", json!([{"id":1}, {"id":2}, {"id":3}]));
+
+        let (page, total) = db.get_indexed_page("log_index", "log:", 1, 1, |_| true);
+
+        assert_eq!(total, 3);
+        assert_eq!(page, vec![json!({"id":2})]);
+
+        drop(db);
+        let _ = fs::remove_file(&path);
     }
 }

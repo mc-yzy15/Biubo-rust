@@ -25,6 +25,8 @@ pub struct RuleEngineConfig {
     pub paranoia_level: u8,
     pub rule_paths: Vec<PathBuf>,
     pub crs_auto_update: bool,
+    #[serde(default)]
+    pub shadow_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,6 +235,7 @@ impl Default for Settings {
                 paranoia_level: 1,
                 rule_paths: Vec::new(),
                 crs_auto_update: false,
+                shadow_mode: false,
             },
 
             ip_reputation_providers: Vec::new(),
@@ -408,6 +411,14 @@ impl Settings {
     }
 
     pub fn save_config(&self) {
+        if let Err(e) = self.try_save_config() {
+            tracing::error!("Failed to save config.json: {}", e);
+        }
+    }
+
+    /// Persist the current settings and report failures to callers that must not
+    /// publish an in-memory configuration unless persistence succeeded.
+    pub fn try_save_config(&self) -> Result<(), String> {
         let config_path = self.project_root.join("config.json");
         let config_data = serde_json::json!({
             "WAF_PORT": self.waf_port,
@@ -435,19 +446,19 @@ impl Settings {
             "SSL_ACME_EMAIL": self.ssl_acme_email,
             "SSL_CERT_DIR": self.ssl_cert_dir.to_string_lossy(),
             "SSL_PORT": self.ssl_port,
+            "RULE_ENGINE": self.rule_engine,
             "INTERNAL_API_KEY": Self::hash_secret_for_storage(&self.internal_api_key),
             "CLUSTER_SHARED_SECRET": Self::hash_secret_for_storage(&self.cluster_shared_secret),
             "INIT_TOKEN": Self::hash_secret_for_storage(&self.init_token),
             "INITIALIZED": self.initialized
         });
 
-        match fs::write(
-            &config_path,
-            serde_json::to_string_pretty(&config_data).unwrap_or_default(),
-        ) {
-            Ok(_) => tracing::info!("Configuration saved to {:?}", config_path),
-            Err(e) => tracing::error!("Failed to save config.json: {}", e),
-        }
+        let content = serde_json::to_string_pretty(&config_data)
+            .map_err(|e| format!("Failed to serialize config.json: {}", e))?;
+        fs::write(&config_path, content)
+            .map_err(|e| format!("Failed to write config.json: {}", e))?;
+        tracing::info!("Configuration saved to {:?}", config_path);
+        Ok(())
     }
 
     fn load_config_file(&mut self) {

@@ -20,6 +20,8 @@ interface RuntimeResponse {
   data?: {
     detection_queue: QueueStats | null
     log_queue: QueueStats
+    advanced_rules_shadow_mode?: boolean
+    advanced_rules_shadow_stats?: Record<string, number>
   }
 }
 
@@ -85,6 +87,16 @@ export function RuntimeHealth() {
         <QueueCard title={t('system.detectionQueue')} queue={runtime?.detection_queue} />
         <QueueCard title={t('system.logQueue')} queue={runtime?.log_queue} />
       </div>
+      {runtime?.advanced_rules_shadow_mode && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <div className="card-title">{t('system.ruleShadowMode')}</div>
+          <div style={{ color: 'var(--yellow)', marginTop: 8 }}>{t('system.ruleShadowEnabled')}</div>
+          <div style={{ display: 'flex', gap: 20, marginTop: 10, color: 'var(--dim)', fontSize: 13 }}>
+            <span>{t('system.shadowMatchedRequests')}: {(runtime.advanced_rules_shadow_stats?.shadow_matched_requests ?? 0).toLocaleString()}</span>
+            <span>{t('system.shadowRuleHits')}: {(runtime.advanced_rules_shadow_stats?.shadow_rule_hits ?? 0).toLocaleString()}</span>
+          </div>
+        </div>
+      )}
     </section>
   )
 }
